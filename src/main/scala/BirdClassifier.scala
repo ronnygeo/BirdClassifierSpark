@@ -1,5 +1,5 @@
-import org.apache.spark.{SparkConf, SparkContext}
-import org.apache.spark.sql.SQLContext
+import org.apache.spark.SparkConf
+import org.apache.spark.sql.SparkSession
 
 /**
   * Created by ronnygeo on 12/1/16.
@@ -9,8 +9,11 @@ object BirdClassifier {
     val conf = new SparkConf()
       .setAppName("Bird Classifier")
      .setMaster("local")
-    val sc = new SparkContext(conf)
-    val sqlContext = new SQLContext(sc)
+
+    val spark = SparkSession
+      .builder()
+      .config(conf)
+      .getOrCreate()
 
     //Initializing constants
     var time = System.currentTimeMillis()
@@ -26,7 +29,7 @@ object BirdClassifier {
     }
 
     //Loading the input files and getting the training set
-    val input_df = sqlContext.read
+    val input_df = spark.read
       .format("csv")
       .option("header", "true") // Use first line of all files as header
       .option("inferSchema", "true") // Automatically infer data types
@@ -46,6 +49,6 @@ object BirdClassifier {
     // var i = 0
 
     //Stopping the spark context
-    sc.stop()
+    spark.stop()
   }
 }
