@@ -31,12 +31,13 @@ object BirdClassifier {
 
     //1016, 1017 duplicate
     //19:954
+    //Drop: 0, 15, 17
+
 
     // String fields: 1, 9:12, 959
 
     //Class label: 26
 
-    //Drop: 0, 15, 17
 
     //if output is specified, use that else default
     if (args.length > 1) {
@@ -52,12 +53,13 @@ object BirdClassifier {
       p1 ++ (p2.drop(offset))
     }
 
+    val labelRDD = inputRDD.map(arr => arr(26))
+
     val newRDD = inputRDD.map{arr =>
-      val arr2 = splitArr(arr, 19, 936)
-      splitArr(splitArr(arr2, 80, 2), 0, 1).toString
+      splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 936), 80, 2), 17, 1), 15, 1), 0, 1)
     }
 
-    newRDD.saveAsTextFile("newRDD")
+    newRDD.take(1)
 
     //TODO: Drop duplicate columns
     //Loading the input files and getting the training set
