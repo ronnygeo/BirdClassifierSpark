@@ -1,6 +1,7 @@
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.ml.classification.LogisticRegression
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{Row, SparkSession}
+import org.apache.spark.sql.types.{StringType, StructField, StructType}
 
 /**
   * Created by ronnygeo on 12/1/16.
@@ -11,12 +12,12 @@ object BirdClassifier {
       .setAppName("Bird Classifier")
      .setMaster("local")
 
-//    val spark = SparkSession
-//      .builder()
-//      .config(conf)
-//      .getOrCreate()
+    val spark = SparkSession
+      .builder()
+      .config(conf)
+      .getOrCreate()
 
-    val sc = new SparkContext(conf)
+    val sc = spark.sparkContext
 
     // For implicit conversions like converting RDDs to DataFrames
 //    import spark.implicits._
@@ -45,7 +46,15 @@ object BirdClassifier {
       output = args(1)
     }
 
+    //Loading the input files and getting the training set
     val inputRDD = sc.textFile(input, 2).map(line => line.split(","))
+
+    //    val input_df = spark.read
+    //      .format("csv")
+    //      .option("header", "true") // Use first line of all files as header
+    //      .option("inferSchema", "true") // Automatically infer data types
+    //      .load(input)
+
 
 
     def splitArr(arr: Array[String], s:Int, offset:Int) : Array[String] = {
@@ -59,15 +68,25 @@ object BirdClassifier {
       splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 936), 80, 2), 17, 1), 15, 1), 0, 1)
     }
 
-    newRDD.take(1)
+    // Generate the schema based on the string of schema
+    val fields = newRDD.take(1)(0).map(
+      fieldName => StructField(fieldName, StringType, nullable = true))
+    val schema = StructType(fields)
 
-    //TODO: Drop duplicate columns
-    //Loading the input files and getting the training set
-//    val input_df = spark.read
-//      .format("csv")
-//      .option("header", "true") // Use first line of all files as header
-//      .option("inferSchema", "true") // Automatically infer data types
-//      .load(input)
+    // Convert records of the RDD (people) to Rows
+    val rowRDD = newRDD.map(attributes => Row.fromSeq(attributes))
+
+    // Apply the schema to the RDD
+    val inputDF = spark.createDataFrame(rowRDD, schema)
+
+//    // Creates a temporary view using the DataFrame
+//    inputDF.createOrReplaceTempView("data")
+//
+//    // SQL can be run over a temporary view created using DataFrames
+//    val results = spark.sql("SELECT * FROM data")
+
+    inputDF.write.format("csv").save(output+"/samplingid.csv")
+
 
 //    val Y = input_df.select("Agelaius_phoeniceus").map(row => !row(0).equals("0"))
 //    val X = input_df.drop(input_df.columns.zipWithIndex.filter(t => (escapCols.contains(t._2))
