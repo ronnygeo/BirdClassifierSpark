@@ -2,6 +2,8 @@ import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.ml.classification.LogisticRegression
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.SQLContext
 
 /**
   * Created by ronnygeo on 12/1/16.
@@ -25,7 +27,7 @@ object BirdClassifier {
     //Initializing constants
     var time = System.currentTimeMillis()
 
-    var input: String = "in/labeled-small2.csv"
+    var input: String = "labeled-small.csv"
     var output:String = "output"
     val escapCols = 19 to 952
     val duplicateCols = Seq(1016, 1017)
@@ -48,7 +50,10 @@ object BirdClassifier {
 
     //Loading the input files and getting the training set
     val inputRDD = sc.textFile(input, 2).map(line => line.split(","))
-
+    
+    //val sqlContext = new SQLContext(sc)
+    val df = spark.read.format("csv").option("header", "true").option("inferSchema", "true").load(input)
+    
     //    val input_df = spark.read
     //      .format("csv")
     //      .option("header", "true") // Use first line of all files as header
@@ -69,15 +74,20 @@ object BirdClassifier {
     }
 
     // Generate the schema based on the string of schema
-    val fields = newRDD.take(1)(0).map(
-      fieldName => StructField(fieldName, StringType, nullable = true))
+    val fields = newRDD.take(1)(0).map(fieldName => StructField(fieldName, StringType, nullable = true))
     val schema = StructType(fields)
+  
 
+    val header = newRDD.first()
+    val noheadRDD = newRDD.filter(!_.sameElements(header))
+    
     // Convert records of the RDD (people) to Rows
-    val rowRDD = newRDD.map(attributes => Row.fromSeq(attributes))
+    val rowRDD = noheadRDD.map(attributes => Row.fromSeq(attributes))
 
     // Apply the schema to the RDD
     val inputDF = spark.createDataFrame(rowRDD, schema)
+    
+    //inputDF.first().get(0).hashCode()
 
 //    // Creates a temporary view using the DataFrame
 //    inputDF.createOrReplaceTempView("data")
@@ -85,7 +95,20 @@ object BirdClassifier {
 //    // SQL can be run over a temporary view created using DataFrames
 //    val results = spark.sql("SELECT * FROM data")
 
-    inputDF.write.format("csv").save(output+"/samplingid.csv")
+    inputDF.write.format("csv").option("header", "true").save(output+"/samplingid")
+    
+    val autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid/*.csv")
+
+    
+  // Creates a temporary view using the DataFrame
+//inputDF.createOrReplaceTempView("people")
+
+// SQL can be run over a temporary view created using DataFrames
+//val results = spark.sql("SELECT COUNTRY,DAY FROM people where EFFORT_HRS>0.3")
+
+  // The results of SQL queries are DataFrames and support all the normal RDD operations
+  // The columns of a row in the result can be accessed by field index or by field name
+ // results.write.format("csv").save(output+"/qid")
 
 
 //    val Y = input_df.select("Agelaius_phoeniceus").map(row => !row(0).equals("0"))
@@ -96,6 +119,7 @@ object BirdClassifier {
 //    X.write.format("csv").save(output+"/samplingid.csv")
 
 //    Y.show(1000)
+   /*
     time = System.currentTimeMillis()
 
     //Getting the initial N value
@@ -116,6 +140,8 @@ object BirdClassifier {
 
 
     //Stopping the spark session
+     * 
+     */
     sc.stop()
 //    spark.stop()
   }
