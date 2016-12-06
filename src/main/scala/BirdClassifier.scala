@@ -20,7 +20,7 @@ object BirdClassifier {
     val spark = SparkSession
       .builder()
       .config(conf)
-      .getOrCreate()
+      .getOrCreate()v
 
     val sc = spark.sparkContext
 
@@ -139,11 +139,33 @@ object BirdClassifier {
     scaledDF.write.parquet(output+"/fDF")
 
 
+    //    labelsPredictions = data.map(lambda lp: lp.label).zip(predictions)
+
     val rows = scaledDF.rdd.zip(labelDF.rdd).map{
       case (rowLeft, rowRight) => Row.fromSeq(rowLeft.toSeq ++ rowRight.toSeq)
     }
+    //    val newSchema = StructType(scaledDF.schema.fields ++ labelDF.schema.fields)
 
-//    val newSchema = StructType(scaledDF.schema.fields ++ labelDF.schema.fields)
+
+    //Random split data into training and test
+
+
+    //Create a list of features
+
+
+    //Choose m features from the list of features with a probability randomly
+
+
+    //split the training data into random subsets using probability
+
+
+    //Pass the subset of features and training data to decision tree classifier
+
+
+    //Try with multiple classifiers, like logistic regression or SVM or LDA
+
+
+
 
 
 
