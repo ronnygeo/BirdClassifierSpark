@@ -4,6 +4,9 @@ import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.SQLContext
+import org.apache.spark.ml.feature.StringIndexer
+import org.apache.spark.ml.feature.VectorAssembler
+import org.apache.spark.ml.linalg.Vectors
 
 /**
   * Created by ronnygeo on 12/1/16.
@@ -99,6 +102,44 @@ object BirdClassifier {
     
     val autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid/*.csv")
 
+    //autoDF.printSchema()
+    
+    var indexer = new StringIndexer().setInputCol("LOC_ID").setOutputCol("LOC_IDIndex")
+    
+    var indexed = indexer.fit(autoDF).transform(autoDF)
+    indexed=indexed.drop("LOC_ID")
+    
+    //TODO: GET string list from schema
+    
+    val x = List("COUNTRY","STATE_PROVINCE","COUNTY","COUNT_TYPE","BAILEY_ECOREGION","SUBNATIONAL2_CODE")
+        // DIST_IN_FLOWING_FRESH , DIST_IN_STANDING_FRESH
+    indexed=indexed.na.fill("__HEREBE_DRAGONS__", x)
+    for (xname <- x) {
+      println(xname)
+      
+      //indexed.na.replace(xname, Map( "" -> "NA"))
+      indexer = new StringIndexer()
+      .setInputCol(xname)
+      .setOutputCol(xname+"Index")
+      
+      indexed = indexer.fit(indexed).transform(indexed)
+      indexed=indexed.drop(xname)
+    }
+    indexed=indexed.drop("DIST_IN_FLOWING_FRESH")
+    indexed=indexed.drop("DIST_IN_STANDING_FRESH")
+    
+    //indexed.printSchema()
+    indexed.write.format("csv").option("header", "true").save(output+"/stindx")
+    
+    indexed=indexed.na.fill(0)
+    
+    val assembler = new VectorAssembler().setInputCols(indexed.columns).setOutputCol("features")
+    
+    val featureDF = assembler.transform(indexed)
+    //featureDF.write.format("csv").option("header", "true").save(output+"/fDF")
+    //featureDF.write.parquet(output+"/fDF")
+    //print (featureDF.take(3))
+    //println(output.select("features", "clicked").first())
     
   // Creates a temporary view using the DataFrame
 //inputDF.createOrReplaceTempView("people")
