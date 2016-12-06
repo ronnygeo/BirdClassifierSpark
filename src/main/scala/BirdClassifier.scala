@@ -4,9 +4,9 @@ import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.SQLContext
-import org.apache.spark.ml.feature.StringIndexer
-import org.apache.spark.ml.feature.VectorAssembler
-import org.apache.spark.ml.linalg.Vectors
+import org.apache.spark.ml.feature.{OneHotEncoder, StringIndexer, VectorAssembler}
+import org.apache.spark.ml.linalg.Vector
+import org.apache.spark.ml.feature.StandardScaler
 
 /**
   * Created by ronnygeo on 12/1/16.
@@ -25,7 +25,7 @@ object BirdClassifier {
     val sc = spark.sparkContext
 
     // For implicit conversions like converting RDDs to DataFrames
-//    import spark.implicits._
+    import spark.implicits._
 
     //Initializing constants
     var time = System.currentTimeMillis()
@@ -51,35 +51,30 @@ object BirdClassifier {
       output = args(1)
     }
 
-    //Loading the input files and getting the training set
-    val inputRDD = sc.textFile(input, 2).map(line => line.split(","))
-    
-    //val sqlContext = new SQLContext(sc)
-    val df = spark.read.format("csv").option("header", "true").option("inferSchema", "true").load(input)
-    
-    //    val input_df = spark.read
-    //      .format("csv")
-    //      .option("header", "true") // Use first line of all files as header
-    //      .option("inferSchema", "true") // Automatically infer data types
-    //      .load(input)
-
-
-
+    //Function to split the string at the particular index and remove the elements in between
     def splitArr(arr: Array[String], s:Int, offset:Int) : Array[String] = {
       val (p1, p2) = arr.splitAt(s)
       p1 ++ (p2.drop(offset))
     }
 
-    val labelRDD = inputRDD.map(arr => arr(26))
+    //Loading the input files and getting the training set
+    val inputRDD = sc.textFile(input, 2).map(line => line.split(","))
 
+
+    val labelRDD = inputRDD.map(arr => arr(26))
+    val labelname = labelRDD.take(1)(0)
+    val labelDF = labelRDD.filter(!_.equals(labelname)).map(v => !v.equals("0")).toDF(labelname)
+
+
+    //Removing all duplicate columns
     val newRDD = inputRDD.map{arr =>
       splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 936), 80, 2), 17, 1), 15, 1), 0, 1)
+//      splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 7), 20, 928), 80, 2), 17, 1), 15, 1), 0, 1)
     }
 
     // Generate the schema based on the string of schema
     val fields = newRDD.take(1)(0).map(fieldName => StructField(fieldName, StringType, nullable = true))
     val schema = StructType(fields)
-  
 
     val header = newRDD.first()
     val noheadRDD = newRDD.filter(!_.sameElements(header))
@@ -90,66 +85,68 @@ object BirdClassifier {
     // Apply the schema to the RDD
     val inputDF = spark.createDataFrame(rowRDD, schema)
     
-    //inputDF.first().get(0).hashCode()
-
-//    // Creates a temporary view using the DataFrame
-//    inputDF.createOrReplaceTempView("data")
-//
-//    // SQL can be run over a temporary view created using DataFrames
-//    val results = spark.sql("SELECT * FROM data")
-
+    //Writing the intermediate result with unnecessary columns removed
     inputDF.write.format("csv").option("header", "true").save(output+"/samplingid")
-    
-    val autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid/*.csv")
 
-    //autoDF.printSchema()
-    
-    var indexer = new StringIndexer().setInputCol("LOC_ID").setOutputCol("LOC_IDIndex")
-    
-    var indexed = indexer.fit(autoDF).transform(autoDF)
-    indexed=indexed.drop("LOC_ID")
-    
-    //TODO: GET string list from schema
-    
-    val x = List("COUNTRY","STATE_PROVINCE","COUNTY","COUNT_TYPE","BAILEY_ECOREGION","SUBNATIONAL2_CODE")
-        // DIST_IN_FLOWING_FRESH , DIST_IN_STANDING_FRESH
-    indexed=indexed.na.fill("__HEREBE_DRAGONS__", x)
+    //TODO: Look at loading it directly without writing to csv
+    //Reading the intermediate result from disk and persist
+    var autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid").cache()
+
+    //String indexing the LOC_ID field and dropping the column
+    var indexer = new StringIndexer()
+
+    //One hot encoder
+//    var encoder = new OneHotEncoder()
+
+    //Columns with String values
+    val x = List("LOC_ID", "COUNTRY","STATE_PROVINCE","COUNTY","COUNT_TYPE","BAILEY_ECOREGION","SUBNATIONAL2_CODE")
+
+    //Fill null values
+    autoDF = autoDF.na.fill("__HEREBE_DRAGONS__", x)
+
+    //Indexing all the columns
     for (xname <- x) {
-      println(xname)
-      
-      //indexed.na.replace(xname, Map( "" -> "NA"))
       indexer = new StringIndexer()
       .setInputCol(xname)
-      .setOutputCol(xname+"Index")
-      
-      indexed = indexer.fit(indexed).transform(indexed)
-      indexed=indexed.drop(xname)
+      .setOutputCol(s"${xname}_INDEX")
+      autoDF = indexer.fit(autoDF).transform(autoDF)
+      //Dropping the columns
+      autoDF = autoDF.drop(xname)
+
+//      encoder = new OneHotEncoder().setInputCol(s"${xname}_INDEX")
+//        .setOutputCol(s"${xname}_VECTOR")
+//      autoDF = encoder.transform(autoDF)
     }
-    indexed=indexed.drop("DIST_IN_FLOWING_FRESH")
-    indexed=indexed.drop("DIST_IN_STANDING_FRESH")
-    
-    //indexed.printSchema()
-    indexed.write.format("csv").option("header", "true").save(output+"/stindx")
-    
-    indexed=indexed.na.fill(0)
-    
-    val assembler = new VectorAssembler().setInputCols(indexed.columns).setOutputCol("features")
-    
-    val featureDF = assembler.transform(indexed)
-    //featureDF.write.format("csv").option("header", "true").save(output+"/fDF")
-    //featureDF.write.parquet(output+"/fDF")
-    //print (featureDF.take(3))
-    //println(output.select("features", "clicked").first())
-    
-  // Creates a temporary view using the DataFrame
-//inputDF.createOrReplaceTempView("people")
 
-// SQL can be run over a temporary view created using DataFrames
-//val results = spark.sql("SELECT COUNTRY,DAY FROM people where EFFORT_HRS>0.3")
 
-  // The results of SQL queries are DataFrames and support all the normal RDD operations
-  // The columns of a row in the result can be accessed by field index or by field name
- // results.write.format("csv").save(output+"/qid")
+    //Removing columns with the null values as it wont help in classification
+    val nullCols = autoDF.schema.fields.filter(_.dataType == StringType).map(_.name)
+    for(col <- nullCols) {
+      autoDF = autoDF.drop(col)
+    }
+
+    //Filling null values with 0
+    autoDF = autoDF.na.fill(0)
+
+    //Initializing the vector assembler to convert the cols to single feature vector
+    val assembler = new VectorAssembler().setInputCols(autoDF.columns).setOutputCol("features")
+    val featureDF = assembler.transform(autoDF).select("features")
+
+    //Feature scaler to scale the features
+    val scaler = new StandardScaler().setInputCol("features").setOutputCol("scaled_features").fit(featureDF)
+    val scaledDF = scaler.transform(featureDF).select($"scaled_features".alias("features"))
+    //.map(_.getAs[Vector]("scaled_features").toArray)
+    scaledDF.write.parquet(output+"/fDF")
+
+
+    val rows = scaledDF.rdd.zip(labelDF.rdd).map{
+      case (rowLeft, rowRight) => Row.fromSeq(rowLeft.toSeq ++ rowRight.toSeq)
+    }
+
+//    val newSchema = StructType(scaledDF.schema.fields ++ labelDF.schema.fields)
+
+
+
 
 
 //    val Y = input_df.select("Agelaius_phoeniceus").map(row => !row(0).equals("0"))
