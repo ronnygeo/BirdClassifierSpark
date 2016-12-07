@@ -6,7 +6,11 @@ import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
 import org.apache.spark.ml.feature._
 import org.apache.spark.ml.linalg.Vector
-import org.apache.spark.ml.tuning.{CrossValidator, ParamGridBuilder}
+import org.apache.spark.ml.tuning.{CrossValidator, CrossValidatorModel, ParamGridBuilder}
+
+import scala.util.Random
+import scala.collection.mutable.ListBuffer
+
 
 /**
   * Created by ronnygeo on 12/1/16.
@@ -37,7 +41,8 @@ object BirdClassifier {
     val numPartitions = 10
     val numTrees = 10
 
-  //TODO: Implement numPartitions while reading data
+
+    //TODO: Implement numPartitions while reading data
 
     //if output is specified, use that else default
     if (args.length > 1) {
@@ -53,11 +58,6 @@ object BirdClassifier {
 
     //Loading the input files and getting the training set
     val inputRDD = sc.textFile(input).map(line => line.split(",")).persist()
-
-//  //TODO: Convert all to map partitions
-//    var labelRDD = inputRDD.map(arr => arr(26))
-//    val labelDF = labelRDD.filter(!_.equals(labelName)).map(v => !v.equals("0")).toDF(labelName).cache()
-
 
     //Removing all duplicate columns
     val newRDD = inputRDD.map{arr =>
@@ -85,21 +85,16 @@ object BirdClassifier {
     //Reading the intermediate result from disk and persist
     var autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid").cache()
 
-    //Creating the labelDF
-    val labelDF = autoDF.select(labelName)
-    autoDF = autoDF.drop(labelName)
-
     //String indexing the LOC_ID field and dropping the column
     var indexer = new StringIndexer()
-
-    //One hot encoder
-//    var encoder = new OneHotEncoder()
 
     //Columns with String values
     val x = List("LOC_ID", "COUNTRY","STATE_PROVINCE","COUNTY","COUNT_TYPE","BAILEY_ECOREGION","SUBNATIONAL2_CODE")
 
     //Fill null values
     autoDF = autoDF.na.fill("__HEREBE_DRAGONS__", x)
+    val numFeatures = autoDF.columns.length - 1
+    var featureCols = autoDF.columns.filter(!_.equals(labelName))
 
     //Indexing all the columns
     for (xname <- x) {
@@ -111,91 +106,103 @@ object BirdClassifier {
       autoDF = autoDF.drop(xname)
     }
 
-
-    //Removing columns with the null values as it wont help in classification
-    val nullCols = autoDF.schema.fields.filter(_.dataType == StringType).map(_.name)
-    for(col <- nullCols) {
-      autoDF = autoDF.drop(col)
-    }
-
-    //Filling null values with 0
-    autoDF = autoDF.na.fill(0)
-
-    //Initializing the vector assembler to convert the cols to single feature vector
-    val assembler = new VectorAssembler().setInputCols(autoDF.columns).setOutputCol("features")
-    val featureDF = assembler.transform(autoDF).select("features").cache()
-
-    //Feature scaler to scale the features
-    val scaler = new StandardScaler().setInputCol("features").setOutputCol("scaled_features").fit(featureDF)
-    val scaledDF = scaler.transform(featureDF).select($"scaled_features".alias("features"))
-    //.map(_.getAs[Vector]("scaled_features").toArray)
-
-
-    val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), if (label.getBoolean(0)) 1.0 else 0.0)}
-
-    // Converting to Labeled Point Class in case of RDD
-    // val dataRDD = zippedRDD.map{case (feature, label) => LabeledPoint(label, feature)}
-
-    //Converting the joined RDD to DF
-    val data = zippedRDD.toDF("features", "label").cache()
-
-    //Doing a split of the input to training and test
-    val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
-
-    //Create a list of features
-
-
-
     //Choose m features from the list of features with a probability randomly
+    var cols = new ListBuffer[List[String]]()
+    while(featureCols.length > numFeatures/numTrees) {
+      var sampleCols: List[String] = Random.shuffle(featureCols.toList).take(numFeatures / numTrees)
+      cols += (sampleCols ++ List(labelName))
+      featureCols = featureCols.filter(v => (!sampleCols.contains(v) || v.equals(labelName)))
+    }
+    val colset = cols.toList
 
-
-    //split the training data into random subsets using probability
-
-
-    //Pass the subset of features and training data to decision tree classifier
 
     // Train a DecisionTree model.
     val dt = new DecisionTreeClassifier()
       .setLabelCol("label")
       .setFeaturesCol("features")
 
-    // Chain indexers and tree in a Pipeline.
-    val pipeline = new Pipeline()
-      .setStages(Array(dt))
+    val Array(trainingData, testData) = autoDF.randomSplit(Array(0.7, 0.3))
 
-    // Train model. This also runs the indexers.
-    val dtModel = pipeline.fit(trainingData)
+    var models = new ListBuffer[CrossValidatorModel]()
 
-    // Make predictions.
-    val predictions = dtModel.transform(testData)
+    for (cols <- colset) {
+      //Creating the labelDF
+      val labelDF = trainingData.select(labelName)
+      //split the training data into random subsets using probability
+      var subDF = trainingData.select(cols.head, cols.tail: _*).sample(true, 0.3)
 
+      //Removing columns with the null values as it wont help in classification
+      val nullCols = subDF.schema.fields.filter(_.dataType == StringType).map(_.name)
+      for(col <- nullCols) {
+        subDF = subDF.drop(col)
+      }
 
-    val paramGrid = new ParamGridBuilder().build() // No parameter search
+      //Filling null values with 0
+      subDF = subDF.na.fill(0)
 
-    val cvEvaluator = new MulticlassClassificationEvaluator()
-      .setLabelCol("label")
-      .setPredictionCol("prediction")
-      .setMetricName("accuracy")
+      //Initializing the vector assembler to convert the cols to single feature vector
+      val assembler = new VectorAssembler().setInputCols(subDF.columns).setOutputCol("features")
+      val featureDF = assembler.transform(subDF).select("features").cache()
 
-    val cv = new CrossValidator()
-      // ml.Pipeline with ml.classification.RandomForestClassifier
-      .setEstimator(pipeline)
-      // ml.evaluation.MulticlassClassificationEvaluator
-      .setEvaluator(cvEvaluator)
-      .setEstimatorParamMaps(paramGrid)
-      .setNumFolds(5)
+      //Feature scaler to scale the features
+      val scaler = new StandardScaler().setInputCol("features").setOutputCol("scaled_features").fit(featureDF)
+      val scaledDF = scaler.transform(featureDF).select($"scaled_features".alias("features"))
 
-    val rfModel = cv.fit(trainingData)
-    val rfPredictions = rfModel.transform(testData)
+      val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), if (label.getBoolean(0)) 1.0 else 0.0)}
+
+      //Converting the joined RDD to DF
+      val data = zippedRDD.toDF("features", "label").cache()
+
+      //Doing a split of the input to training and test
+//      val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
+
+      // Chain indexers and tree in a Pipeline.
+      val pipeline = new Pipeline()
+        .setStages(Array(dt))
+
+      // Train model. This also runs the indexers.
+      val dtModel = pipeline.fit(data)
+
+      val paramGrid = new ParamGridBuilder().build() // No parameter search
+
+      val cvEvaluator = new MulticlassClassificationEvaluator()
+        .setLabelCol("label")
+        .setPredictionCol("prediction")
+        .setMetricName("accuracy")
+
+      val cv = new CrossValidator()
+        // ml.Pipeline with ml.classification.RandomForestClassifier
+        .setEstimator(pipeline)
+        // ml.evaluation.MulticlassClassificationEvaluator
+        .setEvaluator(cvEvaluator)
+        .setEstimatorParamMaps(paramGrid)
+        .setNumFolds(5)
+
+      models += cv.fit(data)
+    }
+
+    //Pass the test data to the all the models and
+    for (data <- testData) {
+      models.map{model =>
+        model.transform(data)
+      }
+      // Make predictions.
+      val predictions = model.transform(testData)
+    }
 
     // Select (prediction, true label) and compute test error.
     val evaluator = new MulticlassClassificationEvaluator()
       .setLabelCol("label")
       .setPredictionCol("prediction")
       .setMetricName("accuracy")
-    val accuracy = evaluator.evaluate(rfPredictions)
+    val accuracy = evaluator.evaluate(predictions)
     println("Accuracy = " + accuracy)
     println("Test Error = " + (1.0 - accuracy))
+
+
+
+
+
 
 
     //parallelize these multiple trees
