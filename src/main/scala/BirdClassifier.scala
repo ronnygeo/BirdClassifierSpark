@@ -1,6 +1,6 @@
 import org.apache.spark.ml.classification.RandomForestClassifier
 import org.apache.spark.SparkConf
-import org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
+import org.apache.spark.ml.evaluation.{BinaryClassificationEvaluator, MulticlassClassificationEvaluator}
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
 import org.apache.spark.ml.feature._
@@ -30,8 +30,8 @@ object BirdClassifier {
 
     var input: String = "labeled-small.csv"
     var output:String = "output"
-    val escapCols = 19 to 952
-    val duplicateCols = Seq(1016, 1017)
+    val numPartitions = 10
+  //TODO: Implement numPartitions while reading data
 
     //if output is specified, use that else default
     if (args.length > 1) {
@@ -46,12 +46,12 @@ object BirdClassifier {
     }
 
     //Loading the input files and getting the training set
-    val inputRDD = sc.textFile(input, 2).map(line => line.split(","))
+    val inputRDD = sc.textFile(input).map(line => line.split(",")).persist()
 
-
+  //TODO: Convert all to map partitions
     var labelRDD = inputRDD.map(arr => arr(26))
     val labelName = labelRDD.take(1)(0)
-    val labelDF = labelRDD.filter(!_.equals(labelName)).map(v => !v.equals("0")).toDF(labelName)
+    val labelDF = labelRDD.filter(!_.equals(labelName)).map(v => !v.equals("0")).toDF(labelName).cache()
 
 
     //Removing all duplicate columns
@@ -117,13 +117,13 @@ object BirdClassifier {
 
     //Initializing the vector assembler to convert the cols to single feature vector
     val assembler = new VectorAssembler().setInputCols(autoDF.columns).setOutputCol("features")
-    val featureDF = assembler.transform(autoDF).select("features")
+    val featureDF = assembler.transform(autoDF).select("features").cache()
 
     //Feature scaler to scale the features
     val scaler = new StandardScaler().setInputCol("features").setOutputCol("scaled_features").fit(featureDF)
     val scaledDF = scaler.transform(featureDF).select($"scaled_features".alias("features"))
     //.map(_.getAs[Vector]("scaled_features").toArray)
-    scaledDF.write.parquet(output+"/fDF")
+//    scaledDF.write.parquet(output+"/fDF")
 
 
     //    labelsPredictions = data.map(lambda lp: lp.label).zip(predictions)
@@ -131,7 +131,7 @@ object BirdClassifier {
     val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), if (label.getBoolean(0)) 1.0 else 0.0)}
 //    val dataRDD = zippedRDD.map{case (feature, label) => LabeledPoint(label, feature)}
 
-    val data = zippedRDD.toDF("features", "label")
+    val data = zippedRDD.toDF("features", "label").cache()
 
     val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
 
@@ -155,6 +155,12 @@ object BirdClassifier {
     .fit(trainingData)
 
     val rfPredictions = rfModel.transform(testData)
+
+//    val cv = new CrossValidator()
+//      .setEstimator(rfModel)
+//      .setEvaluator(new BinaryClassificationEvaluator)
+//      .setEstimatorParamMaps(paramGrid)
+//      .setNumFolds(2)  // Use 3+ in practice
 
     // Select (prediction, true label) and compute test error.
     val evaluator = new MulticlassClassificationEvaluator()
