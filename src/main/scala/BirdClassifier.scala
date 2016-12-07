@@ -1,12 +1,10 @@
-import org.apache.spark.{SparkConf, SparkContext}
-import org.apache.spark.ml.classification.LogisticRegression
+import org.apache.spark.ml.classification.RandomForestClassifier
+import org.apache.spark.SparkConf
+import org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
-import org.apache.spark.sql.types._
-import org.apache.spark.sql.SQLContext
-import org.apache.spark.ml.feature.{OneHotEncoder, StringIndexer, VectorAssembler}
+import org.apache.spark.ml.feature._
 import org.apache.spark.ml.linalg.Vector
-import org.apache.spark.ml.feature.StandardScaler
 
 /**
   * Created by ronnygeo on 12/1/16.
@@ -20,7 +18,7 @@ object BirdClassifier {
     val spark = SparkSession
       .builder()
       .config(conf)
-      .getOrCreate()v
+      .getOrCreate()
 
     val sc = spark.sparkContext
 
@@ -34,16 +32,6 @@ object BirdClassifier {
     var output:String = "output"
     val escapCols = 19 to 952
     val duplicateCols = Seq(1016, 1017)
-
-    //1016, 1017 duplicate
-    //19:954
-    //Drop: 0, 15, 17
-
-
-    // String fields: 1, 9:12, 959
-
-    //Class label: 26
-
 
     //if output is specified, use that else default
     if (args.length > 1) {
@@ -61,15 +49,14 @@ object BirdClassifier {
     val inputRDD = sc.textFile(input, 2).map(line => line.split(","))
 
 
-    val labelRDD = inputRDD.map(arr => arr(26))
-    val labelname = labelRDD.take(1)(0)
-    val labelDF = labelRDD.filter(!_.equals(labelname)).map(v => !v.equals("0")).toDF(labelname)
+    var labelRDD = inputRDD.map(arr => arr(26))
+    val labelName = labelRDD.take(1)(0)
+    val labelDF = labelRDD.filter(!_.equals(labelName)).map(v => !v.equals("0")).toDF(labelName)
 
 
     //Removing all duplicate columns
     val newRDD = inputRDD.map{arr =>
       splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 936), 80, 2), 17, 1), 15, 1), 0, 1)
-//      splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 7), 20, 928), 80, 2), 17, 1), 15, 1), 0, 1)
     }
 
     // Generate the schema based on the string of schema
@@ -141,14 +128,12 @@ object BirdClassifier {
 
     //    labelsPredictions = data.map(lambda lp: lp.label).zip(predictions)
 
-    val rows = scaledDF.rdd.zip(labelDF.rdd).map{
-      case (rowLeft, rowRight) => Row.fromSeq(rowLeft.toSeq ++ rowRight.toSeq)
-    }
-    //    val newSchema = StructType(scaledDF.schema.fields ++ labelDF.schema.fields)
+    val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), if (label.getBoolean(0)) 1.0 else 0.0)}
+//    val dataRDD = zippedRDD.map{case (feature, label) => LabeledPoint(label, feature)}
 
+    val data = zippedRDD.toDF("features", "label")
 
-    //Random split data into training and test
-
+    val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
 
     //Create a list of features
 
@@ -161,9 +146,32 @@ object BirdClassifier {
 
     //Pass the subset of features and training data to decision tree classifier
 
+    //Using default random forest classifier
+    // Train a RandomForest model.
+    val rfModel = new RandomForestClassifier()
+      .setLabelCol("label")
+      .setFeaturesCol("features")
+      .setNumTrees(10)
+    .fit(trainingData)
+
+    val rfPredictions = rfModel.transform(testData)
+
+    // Select (prediction, true label) and compute test error.
+    val evaluator = new MulticlassClassificationEvaluator()
+      .setLabelCol("label")
+      .setPredictionCol("prediction")
+      .setMetricName("accuracy")
+    val accuracy = evaluator.evaluate(rfPredictions)
+    println("Test Error = " + (1.0 - accuracy))
+
+
+    //parallelize these multiple trees
 
     //Try with multiple classifiers, like logistic regression or SVM or LDA
 
+
+    //Combine results from multiple classifiers
+    //If classification take majority count, else take mean
 
 
 
