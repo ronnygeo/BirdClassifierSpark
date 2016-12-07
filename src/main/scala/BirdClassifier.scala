@@ -1,10 +1,12 @@
 import org.apache.spark.ml.classification.RandomForestClassifier
 import org.apache.spark.SparkConf
-import org.apache.spark.ml.evaluation.{BinaryClassificationEvaluator, MulticlassClassificationEvaluator}
+import org.apache.spark.ml.Pipeline
+import org.apache.spark.ml.evaluation.{MulticlassClassificationEvaluator}
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
 import org.apache.spark.ml.feature._
 import org.apache.spark.ml.linalg.Vector
+import org.apache.spark.ml.tuning.{CrossValidator, ParamGridBuilder}
 
 /**
   * Created by ronnygeo on 12/1/16.
@@ -148,19 +150,32 @@ object BirdClassifier {
 
     //Using default random forest classifier
     // Train a RandomForest model.
-    val rfModel = new RandomForestClassifier()
+    val rfClassifier = new RandomForestClassifier()
       .setLabelCol("label")
       .setFeaturesCol("features")
       .setNumTrees(10)
-    .fit(trainingData)
+//    .fit(trainingData)
 
+    val pipeline = new Pipeline().setStages(Array(rfClassifier))
+
+    val paramGrid = new ParamGridBuilder().build() // No parameter search
+
+    val cvEvaluator = new MulticlassClassificationEvaluator()
+      .setLabelCol("label")
+      .setPredictionCol("prediction")
+      // "f1", "precision", "recall", "weightedPrecision", "weightedRecall"
+      .setMetricName("accuracy")
+
+    val cv = new CrossValidator()
+      // ml.Pipeline with ml.classification.RandomForestClassifier
+      .setEstimator(pipeline)
+      // ml.evaluation.MulticlassClassificationEvaluator
+      .setEvaluator(cvEvaluator)
+      .setEstimatorParamMaps(paramGrid)
+      .setNumFolds(5)
+
+    val rfModel = cv.fit(trainingData)
     val rfPredictions = rfModel.transform(testData)
-
-//    val cv = new CrossValidator()
-//      .setEstimator(rfModel)
-//      .setEvaluator(new BinaryClassificationEvaluator)
-//      .setEstimatorParamMaps(paramGrid)
-//      .setNumFolds(2)  // Use 3+ in practice
 
     // Select (prediction, true label) and compute test error.
     val evaluator = new MulticlassClassificationEvaluator()
@@ -168,6 +183,7 @@ object BirdClassifier {
       .setPredictionCol("prediction")
       .setMetricName("accuracy")
     val accuracy = evaluator.evaluate(rfPredictions)
+    println("Accuracy = " + accuracy)
     println("Test Error = " + (1.0 - accuracy))
 
 
@@ -179,44 +195,7 @@ object BirdClassifier {
     //Combine results from multiple classifiers
     //If classification take majority count, else take mean
 
-
-
-
-
-
-
-//    val Y = input_df.select("Agelaius_phoeniceus").map(row => !row(0).equals("0"))
-//    val X = input_df.drop(input_df.columns.zipWithIndex.filter(t => (escapCols.contains(t._2))
-//      // || duplicateCols.contains(t._2))
-//    ).map(t => t._1):_*)
-
-//    X.write.format("csv").save(output+"/samplingid.csv")
-
-//    Y.show(1000)
-   /*
-    time = System.currentTimeMillis()
-
-    //Getting the initial N value
-    println("Preprocessing Time: " + (System.currentTimeMillis() - time)+"ms")
-
-    // Create a LogisticRegression instance. This instance is an Estimator.
-    val lr = new LogisticRegression()
-    // Print out the parameters, documentation, and any default values.
-    println("LogisticRegression parameters:\n" + lr.explainParams() + "\n")
-
-    // We may set parameters using setter methods.
-    lr.setMaxIter(10)
-      .setRegParam(0.01)
-
-    // Learn a LogisticRegression model. This uses the parameters stored in lr.
-//    val model1 = lr.fit(X)
-
-
-
     //Stopping the spark session
-     * 
-     */
-    sc.stop()
-//    spark.stop()
+    spark.stop()
   }
 }
