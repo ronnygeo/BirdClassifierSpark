@@ -1,7 +1,7 @@
-import org.apache.spark.ml.classification.RandomForestClassifier
+import org.apache.spark.ml.classification.{DecisionTreeClassifier, RandomForestClassifier}
 import org.apache.spark.SparkConf
 import org.apache.spark.ml.Pipeline
-import org.apache.spark.ml.evaluation.{MulticlassClassificationEvaluator}
+import org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
 import org.apache.spark.ml.feature._
@@ -33,6 +33,8 @@ object BirdClassifier {
     var input: String = "labeled-small.csv"
     var output:String = "output"
     val numPartitions = 10
+    val numTrees = 10
+
   //TODO: Implement numPartitions while reading data
 
     //if output is specified, use that else default
@@ -101,10 +103,6 @@ object BirdClassifier {
       autoDF = indexer.fit(autoDF).transform(autoDF)
       //Dropping the columns
       autoDF = autoDF.drop(xname)
-
-//      encoder = new OneHotEncoder().setInputCol(s"${xname}_INDEX")
-//        .setOutputCol(s"${xname}_VECTOR")
-//      autoDF = encoder.transform(autoDF)
     }
 
 
@@ -125,16 +123,17 @@ object BirdClassifier {
     val scaler = new StandardScaler().setInputCol("features").setOutputCol("scaled_features").fit(featureDF)
     val scaledDF = scaler.transform(featureDF).select($"scaled_features".alias("features"))
     //.map(_.getAs[Vector]("scaled_features").toArray)
-//    scaledDF.write.parquet(output+"/fDF")
 
-
-    //    labelsPredictions = data.map(lambda lp: lp.label).zip(predictions)
 
     val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), if (label.getBoolean(0)) 1.0 else 0.0)}
-//    val dataRDD = zippedRDD.map{case (feature, label) => LabeledPoint(label, feature)}
 
+    // Converting to Labeled Point Class in case of RDD
+    // val dataRDD = zippedRDD.map{case (feature, label) => LabeledPoint(label, feature)}
+
+    //Converting the joined RDD to DF
     val data = zippedRDD.toDF("features", "label").cache()
 
+    //Doing a split of the input to training and test
     val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
 
     //Create a list of features
@@ -148,22 +147,27 @@ object BirdClassifier {
 
     //Pass the subset of features and training data to decision tree classifier
 
-    //Using default random forest classifier
-    // Train a RandomForest model.
-    val rfClassifier = new RandomForestClassifier()
+    // Train a DecisionTree model.
+    val dt = new DecisionTreeClassifier()
       .setLabelCol("label")
       .setFeaturesCol("features")
-      .setNumTrees(10)
-//    .fit(trainingData)
 
-    val pipeline = new Pipeline().setStages(Array(rfClassifier))
+    // Chain indexers and tree in a Pipeline.
+    val pipeline = new Pipeline()
+      .setStages(Array(dt))
+
+    // Train model. This also runs the indexers.
+    val dtModel = pipeline.fit(trainingData)
+
+    // Make predictions.
+    val predictions = dtModel.transform(testData)
+
 
     val paramGrid = new ParamGridBuilder().build() // No parameter search
 
     val cvEvaluator = new MulticlassClassificationEvaluator()
       .setLabelCol("label")
       .setPredictionCol("prediction")
-      // "f1", "precision", "recall", "weightedPrecision", "weightedRecall"
       .setMetricName("accuracy")
 
     val cv = new CrossValidator()
