@@ -1,8 +1,8 @@
 run:
 	make clean
 	sbt package
-	cp target/birdclassifier-0.1-SNAPSHOT.jar birdclassifier.jar
-	spark-submit --class BirdClassifier birdclassfier.jar in/unlabeled-small.csv output
+	cp target/scala-2.11/birdclassifier_2.11-1.0.jar birdclassifier.jar
+	spark-submit --class BirdClassifier birdclassfier.jar in/labeled-small.csv output
 
 clean:
 	rm -rf output project target *.jar

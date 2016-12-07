@@ -33,7 +33,10 @@ object BirdClassifier {
     var input: String = "labeled-small.csv"
     var output:String = "output"
     val numPartitions = 10
-  //TODO: Implement numPartitions while reading data
+    val labelName = "Agelaius_phoeniceus"
+
+
+    //TODO: Implement numPartitions while reading data
 
     //if output is specified, use that else default
     if (args.length > 1) {
@@ -51,14 +54,12 @@ object BirdClassifier {
     val inputRDD = sc.textFile(input).map(line => line.split(",")).persist()
 
   //TODO: Convert all to map partitions
-    var labelRDD = inputRDD.map(arr => arr(26))
-    val labelName = labelRDD.take(1)(0)
-    val labelDF = labelRDD.filter(!_.equals(labelName)).map(v => !v.equals("0")).toDF(labelName).cache()
-
+//    var labelRDD = inputRDD.map(arr => arr(26))
+//    val labelDF = labelRDD.filter(!_.equals(labelName)).map(v => !v.equals("0")).toDF(labelName).cache()
 
     //Removing all duplicate columns
     val newRDD = inputRDD.map{arr =>
-      splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 936), 80, 2), 17, 1), 15, 1), 0, 1)
+      splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1)
     }
 
     // Generate the schema based on the string of schema
@@ -79,13 +80,16 @@ object BirdClassifier {
 
     //TODO: Look at loading it directly without writing to csv
     //Reading the intermediate result from disk and persist
-    var autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid").cache()
+    var autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid").repartition(numPartitions).cache()
 
     //String indexing the LOC_ID field and dropping the column
     var indexer = new StringIndexer()
 
-    //One hot encoder
-//    var encoder = new OneHotEncoder()
+    val labelDF = autoDF.select(labelName).map{v =>
+      if (v.get(0).equals("0")) 0.0 else 1.0
+    }
+
+    autoDF = autoDF.drop(labelName)
 
     //Columns with String values
     val x = List("LOC_ID", "COUNTRY","STATE_PROVINCE","COUNTY","COUNT_TYPE","BAILEY_ECOREGION","SUBNATIONAL2_CODE")
@@ -101,10 +105,6 @@ object BirdClassifier {
       autoDF = indexer.fit(autoDF).transform(autoDF)
       //Dropping the columns
       autoDF = autoDF.drop(xname)
-
-//      encoder = new OneHotEncoder().setInputCol(s"${xname}_INDEX")
-//        .setOutputCol(s"${xname}_VECTOR")
-//      autoDF = encoder.transform(autoDF)
     }
 
 
@@ -124,76 +124,32 @@ object BirdClassifier {
     //Feature scaler to scale the features
     val scaler = new StandardScaler().setInputCol("features").setOutputCol("scaled_features").fit(featureDF)
     val scaledDF = scaler.transform(featureDF).select($"scaled_features".alias("features"))
-    //.map(_.getAs[Vector]("scaled_features").toArray)
-//    scaledDF.write.parquet(output+"/fDF")
 
-
-    //    labelsPredictions = data.map(lambda lp: lp.label).zip(predictions)
-
-    val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), if (label.getBoolean(0)) 1.0 else 0.0)}
-//    val dataRDD = zippedRDD.map{case (feature, label) => LabeledPoint(label, feature)}
-
+    val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), label)}
     val data = zippedRDD.toDF("features", "label").cache()
 
     val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
 
-    //Create a list of features
-
-
-    //Choose m features from the list of features with a probability randomly
-
-
-    //split the training data into random subsets using probability
-
-
-    //Pass the subset of features and training data to decision tree classifier
-
     //Using default random forest classifier
-    // Train a RandomForest model.
-    val rfClassifier = new RandomForestClassifier()
-      .setLabelCol("label")
-      .setFeaturesCol("features")
-      .setNumTrees(10)
-//    .fit(trainingData)
+    val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(10)
+    rfClassifier.fit(trainingData)
 
     val pipeline = new Pipeline().setStages(Array(rfClassifier))
 
     val paramGrid = new ParamGridBuilder().build() // No parameter search
 
-    val cvEvaluator = new MulticlassClassificationEvaluator()
-      .setLabelCol("label")
-      .setPredictionCol("prediction")
-      // "f1", "precision", "recall", "weightedPrecision", "weightedRecall"
-      .setMetricName("accuracy")
+    val cvEvaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
 
-    val cv = new CrossValidator()
-      // ml.Pipeline with ml.classification.RandomForestClassifier
-      .setEstimator(pipeline)
-      // ml.evaluation.MulticlassClassificationEvaluator
-      .setEvaluator(cvEvaluator)
-      .setEstimatorParamMaps(paramGrid)
-      .setNumFolds(5)
+    val cv = new CrossValidator().setEstimator(pipeline).setEvaluator(cvEvaluator).setEstimatorParamMaps(paramGrid).setNumFolds(5)
 
     val rfModel = cv.fit(trainingData)
     val rfPredictions = rfModel.transform(testData)
 
-    // Select (prediction, true label) and compute test error.
-    val evaluator = new MulticlassClassificationEvaluator()
-      .setLabelCol("label")
-      .setPredictionCol("prediction")
-      .setMetricName("accuracy")
+    //Take the label and prediction of the test data and get the accuracy.
+    val evaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
     val accuracy = evaluator.evaluate(rfPredictions)
     println("Accuracy = " + accuracy)
     println("Test Error = " + (1.0 - accuracy))
-
-
-    //parallelize these multiple trees
-
-    //Try with multiple classifiers, like logistic regression or SVM or LDA
-
-
-    //Combine results from multiple classifiers
-    //If classification take majority count, else take mean
 
     //Stopping the spark session
     spark.stop()
