@@ -34,6 +34,7 @@ object BirdClassifier {
     var output:String = "output"
     val numPartitions = 10
     val labelName = "Agelaius_phoeniceus"
+    var test: String = null
 
 
     //TODO: Implement numPartitions while reading data
@@ -42,6 +43,9 @@ object BirdClassifier {
     if (args.length > 1) {
       input = args(0)
       output = args(1)
+      if (args.length > 2) {
+        test = args(2)
+      }
     }
 
     //Function to split the string at the particular index and remove the elements in between
@@ -53,9 +57,6 @@ object BirdClassifier {
     //Loading the input files and getting the training set
     val inputRDD = sc.textFile(input).map(line => line.split(",")).persist()
 
-  //TODO: Convert all to map partitions
-//    var labelRDD = inputRDD.map(arr => arr(26))
-//    val labelDF = labelRDD.filter(!_.equals(labelName)).map(v => !v.equals("0")).toDF(labelName).cache()
 
     //Removing all duplicate columns
     val newRDD = inputRDD.map{arr =>
@@ -82,12 +83,13 @@ object BirdClassifier {
     //Reading the intermediate result from disk and persist
     var autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid").repartition(numPartitions).cache()
 
+    //TODO: Move pre-processing to a function that takes the required values, as test data also needs to be preprocessed
     //String indexing the LOC_ID field and dropping the column
     var indexer = new StringIndexer()
 
     val labelDF = autoDF.select(labelName).map{v =>
       if (v.get(0).equals("0")) 0.0 else 1.0
-    }
+    }.cache()
 
     autoDF = autoDF.drop(labelName)
 
@@ -148,8 +150,8 @@ object BirdClassifier {
     //Take the label and prediction of the test data and get the accuracy.
     val evaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
     val accuracy = evaluator.evaluate(rfPredictions)
-    println("Accuracy = " + accuracy)
-    println("Test Error = " + (1.0 - accuracy))
+    println("Accuracy for test set = " + accuracy)
+    println("Test Error for test set = " + (1.0 - accuracy))
 
     //Stopping the spark session
     spark.stop()
