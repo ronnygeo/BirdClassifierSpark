@@ -32,6 +32,8 @@ object BirdClassifier {
 
     var input: String = "labeled-small.csv"
     var output:String = "output"
+
+    val labelName = "Agelaius_phoeniceus"
     val numPartitions = 10
     val numTrees = 10
 
@@ -52,15 +54,15 @@ object BirdClassifier {
     //Loading the input files and getting the training set
     val inputRDD = sc.textFile(input).map(line => line.split(",")).persist()
 
-  //TODO: Convert all to map partitions
-    var labelRDD = inputRDD.map(arr => arr(26))
-    val labelName = labelRDD.take(1)(0)
-    val labelDF = labelRDD.filter(!_.equals(labelName)).map(v => !v.equals("0")).toDF(labelName).cache()
+//  //TODO: Convert all to map partitions
+//    var labelRDD = inputRDD.map(arr => arr(26))
+//    val labelDF = labelRDD.filter(!_.equals(labelName)).map(v => !v.equals("0")).toDF(labelName).cache()
 
 
     //Removing all duplicate columns
     val newRDD = inputRDD.map{arr =>
-      splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 936), 80, 2), 17, 1), 15, 1), 0, 1)
+      splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1)
+//      splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 936), 80, 2), 17, 1), 15, 1), 0, 1)
     }
 
     // Generate the schema based on the string of schema
@@ -82,6 +84,10 @@ object BirdClassifier {
     //TODO: Look at loading it directly without writing to csv
     //Reading the intermediate result from disk and persist
     var autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid").cache()
+
+    //Creating the labelDF
+    val labelDF = autoDF.select(labelName)
+    autoDF = autoDF.drop(labelName)
 
     //String indexing the LOC_ID field and dropping the column
     var indexer = new StringIndexer()
@@ -137,6 +143,7 @@ object BirdClassifier {
     val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
 
     //Create a list of features
+
 
 
     //Choose m features from the list of features with a probability randomly
