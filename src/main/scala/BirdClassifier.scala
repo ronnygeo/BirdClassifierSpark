@@ -1,4 +1,4 @@
-import org.apache.spark.ml.classification.{DecisionTreeClassifier, RandomForestClassifier}
+import org.apache.spark.ml.classification.{DecisionTreeClassifier, LogisticRegression, RandomForestClassifier}
 import org.apache.spark.SparkConf
 import org.apache.spark.ml.Pipeline
 import org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
@@ -147,14 +147,15 @@ object BirdClassifier {
 
     //Pass the subset of features and training data to decision tree classifier
 
-    // Train a DecisionTree model.
-    val dt = new DecisionTreeClassifier()
-      .setLabelCol("label")
-      .setFeaturesCol("features")
+    // Train a LogisticRegression model.
+    val lr = new LogisticRegression()
+      .setMaxIter(10)
+      .setRegParam(0.3)
+      .setElasticNetParam(0.8)
 
     // Chain indexers and tree in a Pipeline.
     val pipeline = new Pipeline()
-      .setStages(Array(dt))
+      .setStages(Array(lr))
 
     // Train model. This also runs the indexers.
     val dtModel = pipeline.fit(trainingData)
