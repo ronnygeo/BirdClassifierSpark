@@ -32,9 +32,10 @@ object BirdClassifier {
 
     var input: String = "labeled-small.csv"
     var output:String = "output"
-    val numPartitions = 30
-    val numTrees = 15
-    val numFolds = 5
+    val numPartitions = 50
+    val numTrees = 20
+    val numFolds = 3
+    val numPCA = 650
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
 
@@ -57,8 +58,7 @@ object BirdClassifier {
     }
 
     //Loading the input files and getting the training set
-    val inputRDD = sc.textFile(input).map(line => line.split(",")).persist()
-
+    val inputRDD = sc.textFile(input, numPartitions).map(line => line.split(","))
 
     //Removing all duplicate columns
     val newRDD = inputRDD.map{arr =>
@@ -80,7 +80,6 @@ object BirdClassifier {
     
     //Writing the intermediate result with unnecessary columns removed
     inputDF.write.format("csv").option("header", "true").save("temp")
-    inputRDD.unpersist()
 
     //TODO: Look at loading it directly without writing to csv
     //Reading the intermediate result from disk and persist
@@ -92,7 +91,7 @@ object BirdClassifier {
 
     val labelDF = autoDF.select(labelName).map{v =>
       if (v.get(0).equals("0")) 0.0 else 1.0
-    }.cache()
+    }
 
     autoDF = autoDF.drop(labelName)
 
@@ -124,7 +123,7 @@ object BirdClassifier {
 
     //Initializing the vector assembler to convert the cols to single feature vector
     val assembler = new VectorAssembler().setInputCols(autoDF.columns).setOutputCol("features")
-    val featureDF = assembler.transform(autoDF).select("features").cache()
+    val featureDF = assembler.transform(autoDF).select("features")
 
     //Feature scaler to scale the features
     val scaler = new StandardScaler().setInputCol("features").setOutputCol("scaled_features").fit(featureDF)
@@ -133,20 +132,20 @@ object BirdClassifier {
     val pca = new PCA()
       .setInputCol("features")
       .setOutputCol("pcaFeatures")
-      .setK(450)
+      .setK(numPCA)
       .fit(scaledDF)
     val pcaDF = pca.transform(scaledDF)
     val fDF = pcaDF.select($"pcaFeatures".alias("features"))
 
 //    val fDF = scaledDF
     val zippedRDD = fDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), label)}
-    val data = zippedRDD.toDF("features", "label").cache()
+    val data = zippedRDD.toDF("features", "label")
 
-    val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
+    val Array(trainingData, testData) = data.randomSplit(Array(0.8, 0.2))
 
     //Using default random forest classifier
     val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(numTrees)
-    rfClassifier.fit(trainingData)
+//    rfClassifier.fit(trainingData)
 
     val pipeline = new Pipeline().setStages(Array(rfClassifier))
 
