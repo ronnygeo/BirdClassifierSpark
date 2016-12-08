@@ -19,7 +19,7 @@ object BirdClassifier {
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf()
       .setAppName("Bird Classifier")
-     .setMaster("local")
+     .setMaster("local[*]")
 
     val spark = SparkSession
       .builder()
@@ -106,31 +106,29 @@ object BirdClassifier {
       .setOutputCol(s"${xname}_INDEX")
       trainDF = indexer.fit(trainDF).transform(trainDF)
       //Dropping the columns
-      trainDF = trainDF.drop(xname)
+//      trainDF = trainDF.drop(xname)
     }
 
     //Choose m features from the list of features with a probability randomly
     var cols = new ListBuffer[List[String]]()
     while(featureCols.length > numFeatures/numTrees || featureCols.length > 0) {
       var sampleCols: List[String] = Random.shuffle(featureCols.toList).take((numFeatures / numTrees) + 1)
-      cols += sampleCols
+      cols += (sampleCols ++ List(labelName))
       featureCols = featureCols.filter(v => !sampleCols.contains(v) || v.equals(labelName))
     }
     val colset = cols.toList
 
-
     // Train a DecisionTree model.
     val dt = new DecisionTreeClassifier().setLabelCol("label").setFeaturesCol("features")
 
-//    val Array(trainingData, testData) = trainDF.randomSplit(Array(0.7, 0.3))
-
-    var models = new ListBuffer[CrossValidatorModel]()
+    var modelsT = new ListBuffer[CrossValidatorModel]()
 
     for (cols <- colset) {
-      //Creating the labelDF
-      val labelDF = trainDF.select(labelName)
       //split the training data into random subsets using probability
       var subDF = trainDF.select(cols.head, cols.tail: _*).sample(true, numDataSample)
+      //Creating the labelDF
+      val labelDF = subDF.select(labelName)
+      subDF.drop(labelName)
 
       //Removing columns with the null values as it wont help in classification
       val nullCols = subDF.schema.fields.filter(_.dataType == StringType).map(_.name)
@@ -156,35 +154,77 @@ object BirdClassifier {
       val data = zippedRDD.toDF("features", "label").cache()
 
       // Chain indexers and tree in a Pipeline.
-      val pipeline = new Pipeline()
-        .setStages(Array(dt))
+      val pipeline = new Pipeline().setStages(Array(dt))
 
       // Train model. This also runs the indexers.
       val dtModel = pipeline.fit(data)
 
       val paramGrid = new ParamGridBuilder().build() // No parameter search
 
-      val cvEvaluator = new MulticlassClassificationEvaluator()
-        .setLabelCol("label")
-        .setPredictionCol("prediction")
-        .setMetricName("accuracy")
+      val cvEvaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
 
-      val cv = new CrossValidator()
-        // ml.Pipeline with ml.classification.RandomForestClassifier
-        .setEstimator(pipeline)
-        // ml.evaluation.MulticlassClassificationEvaluator
-        .setEvaluator(cvEvaluator)
-        .setEstimatorParamMaps(paramGrid)
-        .setNumFolds(5)
+      val cv = new CrossValidator().setEstimator(pipeline).setEvaluator(cvEvaluator).setEstimatorParamMaps(paramGrid).setNumFolds(5)
 
-      models += cv.fit(data)
+      modelsT += cv.fit(data)
     }
 
+    val models = modelsT.toList
+
+    //Testing phase
+    //Reading the intermediate result from disk and persist
+    var testDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load("testTemp")
+
+    //Fill null values
+    testDF = testDF.na.fill("__HEREBE_DRAGONS__", x)
+    val numFeatures = testDF.columns.length - 1
+    var featureCols = testDF.columns.filter(!_.equals(labelName))
+
+    //Indexing all the columns
+    for (xname <- x) {
+      indexer = new StringIndexer()
+        .setInputCol(xname)
+        .setOutputCol(s"${xname}_INDEX")
+      testDF = indexer.fit(testDF).transform(testDF).cache()
+    }
+
+      //line with Row object and
+      var predictionsTotal = ListBuffer[Array[Int]]()
+    //Creating the labelDF
+
+
+    for (i <- 0 until numTrees) {
+      val cols = colset(i)
+      var subDF = testDF.select(cols.head, cols.tail: _*)
+      val labelDF = subDF.select(labelName)
+      subDF.drop(labelName)
+
+      //Removing columns with the null values as it wont help in classification
+      val nullCols = subDF.schema.fields.filter(_.dataType == StringType).map(_.name)
+
+      for(col <- nullCols) {
+        subDF = subDF.drop(col)
+      }
+
+      //Filling null values with 0
+      subDF = subDF.na.fill(0)
+
+      //Initializing the vector assembler to convert the cols to single feature vector
+      val assembler = new VectorAssembler().setInputCols(subDF.columns).setOutputCol("features")
+      val featureDF = assembler.transform(subDF).select("features").cache()
+
+      predictionsTotal += models(i).transform(featureDF).select("prediction").collect().map(_(0) == 1).map(v => if (v) 1 else 0)
+    }
+
+    for (i <- 0 until testDF.count.toInt) {
+      var preds: Array[Boolean] = null
+      for (j <- predictionsTotal.indices) {
+        preds += predictionsTotal(j)(i)
+      }
+      preds.map()
+    }
+
+
     //Pass the test data to the all the models and
-    //TODO: Change to testDF
-//    trainDF.map{ line =>
-//      models.map(model => model.transform(line).select("prediction").take(1)(0))
-//    }
 //
 ////    sc.parallelize(, numPartitions)
 //
