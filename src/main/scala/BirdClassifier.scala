@@ -34,20 +34,22 @@ object BirdClassifier {
     //Initializing constants
     var time = System.currentTimeMillis()
 
-    var input: String = "labeled-small.csv"
+    var trainInput: String = "labeled-train.csv"
+    var testInput: String = "labeled-test.csv"
     var output:String = "output"
 
     val labelName = "Agelaius_phoeniceus"
     val numPartitions = 10
     val numTrees = 10
-
+  val numDataSample = 0.3
 
     //TODO: Implement numPartitions while reading data
 
     //if output is specified, use that else default
     if (args.length > 1) {
-      input = args(0)
-      output = args(1)
+      trainInput = args(0)
+      testInput = args(1)
+      if (args.length > 2) output = args(2)
     }
 
     //Function to split the string at the particular index and remove the elements in between
@@ -57,7 +59,7 @@ object BirdClassifier {
     }
 
     //Loading the input files and getting the training set
-    val inputRDD = sc.textFile(input).map(line => line.split(",")).persist()
+    val inputRDD = sc.textFile(trainInput).map(line => line.split(",")).persist()
 
     //Removing all duplicate columns
     val newRDD = inputRDD.map{arr =>
@@ -83,7 +85,7 @@ object BirdClassifier {
 
     //TODO: Look at loading it directly without writing to csv
     //Reading the intermediate result from disk and persist
-    var autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid").cache()
+    var trainDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid").cache()
 
     //String indexing the LOC_ID field and dropping the column
     var indexer = new StringIndexer()
@@ -91,48 +93,48 @@ object BirdClassifier {
     //Columns with String values
     val x = List("LOC_ID", "COUNTRY","STATE_PROVINCE","COUNTY","COUNT_TYPE","BAILEY_ECOREGION","SUBNATIONAL2_CODE")
 
+
     //Fill null values
-    autoDF = autoDF.na.fill("__HEREBE_DRAGONS__", x)
-    val numFeatures = autoDF.columns.length - 1
-    var featureCols = autoDF.columns.filter(!_.equals(labelName))
+    trainDF = trainDF.na.fill("__HEREBE_DRAGONS__", x)
+    val numFeatures = trainDF.columns.length - 1
+    var featureCols = trainDF.columns.filter(!_.equals(labelName))
 
     //Indexing all the columns
     for (xname <- x) {
       indexer = new StringIndexer()
       .setInputCol(xname)
       .setOutputCol(s"${xname}_INDEX")
-      autoDF = indexer.fit(autoDF).transform(autoDF)
+      trainDF = indexer.fit(trainDF).transform(trainDF)
       //Dropping the columns
-      autoDF = autoDF.drop(xname)
+      trainDF = trainDF.drop(xname)
     }
 
     //Choose m features from the list of features with a probability randomly
     var cols = new ListBuffer[List[String]]()
-    while(featureCols.length > numFeatures/numTrees) {
-      var sampleCols: List[String] = Random.shuffle(featureCols.toList).take(numFeatures / numTrees)
-      cols += (sampleCols ++ List(labelName))
-      featureCols = featureCols.filter(v => (!sampleCols.contains(v) || v.equals(labelName)))
+    while(featureCols.length > numFeatures/numTrees || featureCols.length > 0) {
+      var sampleCols: List[String] = Random.shuffle(featureCols.toList).take((numFeatures / numTrees) + 1)
+      cols += sampleCols
+      featureCols = featureCols.filter(v => !sampleCols.contains(v) || v.equals(labelName))
     }
     val colset = cols.toList
 
 
     // Train a DecisionTree model.
-    val dt = new DecisionTreeClassifier()
-      .setLabelCol("label")
-      .setFeaturesCol("features")
+    val dt = new DecisionTreeClassifier().setLabelCol("label").setFeaturesCol("features")
 
-    val Array(trainingData, testData) = autoDF.randomSplit(Array(0.7, 0.3))
+//    val Array(trainingData, testData) = trainDF.randomSplit(Array(0.7, 0.3))
 
     var models = new ListBuffer[CrossValidatorModel]()
 
     for (cols <- colset) {
       //Creating the labelDF
-      val labelDF = trainingData.select(labelName)
+      val labelDF = trainDF.select(labelName)
       //split the training data into random subsets using probability
-      var subDF = trainingData.select(cols.head, cols.tail: _*).sample(true, 0.3)
+      var subDF = trainDF.select(cols.head, cols.tail: _*).sample(true, numDataSample)
 
       //Removing columns with the null values as it wont help in classification
       val nullCols = subDF.schema.fields.filter(_.dataType == StringType).map(_.name)
+
       for(col <- nullCols) {
         subDF = subDF.drop(col)
       }
@@ -148,13 +150,10 @@ object BirdClassifier {
       val scaler = new StandardScaler().setInputCol("features").setOutputCol("scaled_features").fit(featureDF)
       val scaledDF = scaler.transform(featureDF).select($"scaled_features".alias("features"))
 
-      val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), if (label.getBoolean(0)) 1.0 else 0.0)}
+      val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), if (label.getString(0).equals("0")) 0.0 else 1.0)}
 
       //Converting the joined RDD to DF
       val data = zippedRDD.toDF("features", "label").cache()
-
-      //Doing a split of the input to training and test
-//      val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
 
       // Chain indexers and tree in a Pipeline.
       val pipeline = new Pipeline()
@@ -182,23 +181,23 @@ object BirdClassifier {
     }
 
     //Pass the test data to the all the models and
-    for (data <- testData) {
-      models.map{model =>
-        model.transform(data)
-      }
-      // Make predictions.
-      val predictions = model.transform(testData)
-    }
-
-    // Select (prediction, true label) and compute test error.
-    val evaluator = new MulticlassClassificationEvaluator()
-      .setLabelCol("label")
-      .setPredictionCol("prediction")
-      .setMetricName("accuracy")
-    val accuracy = evaluator.evaluate(predictions)
-    println("Accuracy = " + accuracy)
-    println("Test Error = " + (1.0 - accuracy))
-
+    //TODO: Change to testDF
+//    trainDF.map{ line =>
+//      models.map(model => model.transform(line).select("prediction").take(1)(0))
+//    }
+//
+////    sc.parallelize(, numPartitions)
+//
+//
+//    // Select (prediction, true label) and compute test error.
+//    val evaluator = new MulticlassClassificationEvaluator()
+//      .setLabelCol("label")
+//      .setPredictionCol("prediction")
+//      .setMetricName("accuracy")
+//    val accuracy = evaluator.evaluate(predictions)
+//    println("Accuracy = " + accuracy)
+//    println("Test Error = " + (1.0 - accuracy))
+//
 
 
 
