@@ -15,7 +15,7 @@ object BirdClassifier {
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf()
       .setAppName("Bird Classifier")
-     .setMaster("local")
+     .setMaster("local[*]")
 
     val spark = SparkSession
       .builder()
@@ -32,7 +32,9 @@ object BirdClassifier {
 
     var input: String = "labeled-small.csv"
     var output:String = "output"
-    val numPartitions = 10
+    val numPartitions = 30
+    val numTrees = 15
+    val numFolds = 5
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
 
@@ -77,11 +79,12 @@ object BirdClassifier {
     val inputDF = spark.createDataFrame(rowRDD, schema)
     
     //Writing the intermediate result with unnecessary columns removed
-    inputDF.write.format("csv").option("header", "true").save(output+"/samplingid")
+    inputDF.write.format("csv").option("header", "true").save("temp")
+    inputRDD.unpersist()
 
     //TODO: Look at loading it directly without writing to csv
     //Reading the intermediate result from disk and persist
-    var autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid").repartition(numPartitions).cache()
+    var autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load("temp").repartition(numPartitions)
 
     //TODO: Move pre-processing to a function that takes the required values, as test data also needs to be preprocessed
     //String indexing the LOC_ID field and dropping the column
@@ -127,13 +130,22 @@ object BirdClassifier {
     val scaler = new StandardScaler().setInputCol("features").setOutputCol("scaled_features").fit(featureDF)
     val scaledDF = scaler.transform(featureDF).select($"scaled_features".alias("features"))
 
-    val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), label)}
+    val pca = new PCA()
+      .setInputCol("features")
+      .setOutputCol("pcaFeatures")
+      .setK(450)
+      .fit(scaledDF)
+    val pcaDF = pca.transform(scaledDF)
+    val fDF = pcaDF.select($"pcaFeatures".alias("features"))
+
+//    val fDF = scaledDF
+    val zippedRDD = fDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), label)}
     val data = zippedRDD.toDF("features", "label").cache()
 
     val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
 
     //Using default random forest classifier
-    val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(10)
+    val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(numTrees)
     rfClassifier.fit(trainingData)
 
     val pipeline = new Pipeline().setStages(Array(rfClassifier))
@@ -142,10 +154,12 @@ object BirdClassifier {
 
     val cvEvaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
 
-    val cv = new CrossValidator().setEstimator(pipeline).setEvaluator(cvEvaluator).setEstimatorParamMaps(paramGrid).setNumFolds(5)
+    val cv = new CrossValidator().setEstimator(pipeline).setEvaluator(cvEvaluator).setEstimatorParamMaps(paramGrid).setNumFolds(numFolds)
 
     val rfModel = cv.fit(trainingData)
     val rfPredictions = rfModel.transform(testData)
+
+    rfPredictions.select("prediction").write.format("csv").option("header", "true").save(output)
 
     //Take the label and prediction of the test data and get the accuracy.
     val evaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
