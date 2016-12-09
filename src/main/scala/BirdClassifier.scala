@@ -15,7 +15,7 @@ object BirdClassifier {
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf()
       .setAppName("Bird Classifier")
-//     .setMaster("local")
+     .setMaster("local")
 
     val spark = SparkSession
       .builder()
@@ -33,10 +33,10 @@ object BirdClassifier {
     var input: String = "labeled-small.csv.bz2"
     var output:String = "output"
     val numPartitions = 25
-    val numFolds = 3
+    val numFolds = 5
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
-    val numTrees = 29
+    val numTrees = 57
 
 
     //TODO: Implement numPartitions while reading data
@@ -117,7 +117,7 @@ object BirdClassifier {
     }
 
     //Filling null values with 0
-    autoDF = autoDF.na.fill(0)
+    autoDF = autoDF.na.fill(-1)
 
     //Initializing the vector assembler to convert the cols to single feature vector
     val assembler = new VectorAssembler().setInputCols(autoDF.columns).setOutputCol("features")
