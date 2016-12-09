@@ -15,7 +15,7 @@ object BirdClassifier {
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf()
       .setAppName("Bird Classifier")
-//     .setMaster("local[*]")
+     .setMaster("local[*]")
 
     val spark = SparkSession
       .builder()
@@ -33,11 +33,11 @@ object BirdClassifier {
     var input: String = "labeled-small.csv.bz2"
     var output:String = "output"
     val numPartitions = 25
-    val numFolds = 3
+    val numFolds = 5
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
-    val numTrees = 17
-    val numPCA = 300
+    val numTrees = 25
+    val numPCA = 250
 
 
     //TODO: Implement numPartitions while reading data
@@ -141,7 +141,7 @@ object BirdClassifier {
     val zippedRDD = fDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), label)}
     val data = zippedRDD.toDF("features", "label")
 
-    val Array(trainingData, testData) = data.randomSplit(Array(0.9, 0.1))
+    val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
 
     //Using default random forest classifier
     val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(numTrees)
