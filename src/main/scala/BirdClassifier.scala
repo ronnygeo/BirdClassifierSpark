@@ -7,11 +7,56 @@ import org.apache.spark.sql.types.{StringType, StructField, StructType}
 import org.apache.spark.ml.feature._
 import org.apache.spark.ml.linalg.Vector
 import org.apache.spark.ml.tuning.{CrossValidator, ParamGridBuilder}
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.DataFrame
 
 /**
   * Created by ronnygeo on 12/1/16.
   */
 object BirdClassifier {
+  
+  def rdd2DF(spark : SparkSession,ipRDD : RDD[Array[String]]) : DataFrame ={
+    val fields = ipRDD.take(1)(0).map(fieldName => StructField(fieldName, StringType, nullable = true))
+    val schema = StructType(fields)
+
+    val header = ipRDD.first()
+    val noheadRDD = ipRDD.filter(!_.sameElements(header))
+    
+    // Convert records of the RDD (people) to Rows
+    val rowRDD = noheadRDD.map(attributes => Row.fromSeq(attributes))
+
+    // Apply the schema to the RDD
+    spark.createDataFrame(rowRDD, schema)
+  }
+  
+  def DFnullFix(idf : DataFrame,labelName:String): DataFrame ={
+    var df = idf.drop(labelName)
+
+    //Columns with String values
+    val x = List("LOC_ID", "COUNTRY","STATE_PROVINCE","COUNTY","COUNT_TYPE","BAILEY_ECOREGION","SUBNATIONAL2_CODE")
+
+    //Fill null values
+    df = df.na.fill("__HEREBE_DRAGONS__", x)
+    var indexer = new StringIndexer()
+    //Indexing all the columns
+    for (xname <- x) {
+      indexer = new StringIndexer()
+      .setInputCol(xname)
+      .setOutputCol(s"${xname}_INDEX")
+      df = indexer.fit(df).transform(df)
+    }
+
+
+    //Removing columns with the null values and Strings as it wont help in classification
+    val nullCols = df.schema.fields.filter(_.dataType == StringType).map(_.name)
+    for(col <- nullCols) {
+      df = df.drop(col)
+    }
+
+    //Filling null values with 0
+    df.na.fill(0)
+  }
+  
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf()
       .setAppName("Bird Classifier")
@@ -57,7 +102,7 @@ object BirdClassifier {
     }
 
     //Loading the input files and getting the training set
-    val inputRDD = sc.textFile(input,numPartitions).map(line => line.split(","))
+    val inputRDD = sc.textFile(input).map(line => line.split(","))
 
 
     //Removing all duplicate columns
@@ -65,21 +110,11 @@ object BirdClassifier {
       splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1)
     }
 
-    // Generate the schema based on the string of schema
-    val fields = newRDD.take(1)(0).map(fieldName => StructField(fieldName, StringType, nullable = true))
-    val schema = StructType(fields)
-
-    val header = newRDD.first()
-    val noheadRDD = newRDD.filter(!_.sameElements(header))
-    
-    // Convert records of the RDD (people) to Rows
-    val rowRDD = noheadRDD.map(attributes => Row.fromSeq(attributes))
-
     // Apply the schema to the RDD
-    val inputDF = spark.createDataFrame(rowRDD, schema)
+    val inputDF = rdd2DF(spark,newRDD)
     
     //Writing the intermediate result with unnecessary columns removed
-    inputDF.write.format("csv").option("header", "true").save(output+"/samplingid")
+    inputDF.write.format("csv").option("nullValue","?").option("header", "true").save(output+"/samplingid")
 
     //TODO: Look at loading it directly without writing to csv
     //Reading the intermediate result from disk and persist
@@ -87,39 +122,13 @@ object BirdClassifier {
 
     //TODO: Move pre-processing to a function that takes the required values, as test data also needs to be preprocessed
     //String indexing the LOC_ID field and dropping the column
-    var indexer = new StringIndexer()
+    //var indexer = new StringIndexer()
 
     val labelDF = autoDF.select(labelName).map{v =>
       if (v.get(0).equals("0")) 0.0 else 1.0
     }
 
-    autoDF = autoDF.drop(labelName)
-
-    //Columns with String values
-    val x = List("LOC_ID", "COUNTRY","STATE_PROVINCE","COUNTY","COUNT_TYPE","BAILEY_ECOREGION","SUBNATIONAL2_CODE")
-
-    //Fill null values
-    autoDF = autoDF.na.fill("__HEREBE_DRAGONS__", x)
-
-    //Indexing all the columns
-    for (xname <- x) {
-      indexer = new StringIndexer()
-      .setInputCol(xname)
-      .setOutputCol(s"${xname}_INDEX")
-      autoDF = indexer.fit(autoDF).transform(autoDF)
-      //Dropping the columns
-//      autoDF = autoDF.drop(xname)
-    }
-
-
-    //Removing columns with the null values as it wont help in classification
-    val nullCols = autoDF.schema.fields.filter(_.dataType == StringType).map(_.name)
-    for(col <- nullCols) {
-      autoDF = autoDF.drop(col)
-    }
-
-    //Filling null values with 0
-    autoDF = autoDF.na.fill(0)
+    autoDF = DFnullFix(autoDF,labelName);
 
     //Initializing the vector assembler to convert the cols to single feature vector
     val assembler = new VectorAssembler().setInputCols(autoDF.columns).setOutputCol("features")
@@ -147,13 +156,6 @@ object BirdClassifier {
 
     val rfModel = cv.fit(data)
 
-//    //Take the label and prediction of the test data and get the accuracy.
-//    val evaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
-//    val accuracy = evaluator.evaluate(rfPredictions)
-//    println("Accuracy for test set = " + accuracy)
-//    println("Test Error for test set = " + (1.0 - accuracy))
-    
-    
     //Loading the input files and getting the training set
     val testRDD = sc.textFile(test, numPartitions).map(line => line.split(",")).persist()
 
@@ -163,18 +165,8 @@ object BirdClassifier {
       splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1)
     }
 
-    // Generate the schema based on the string of schema
-    val tfields = filteredRDD.take(1)(0).map(fieldName => StructField(fieldName, StringType, nullable = true))
-    val tschema = StructType(tfields)
-
-    val Theader = filteredRDD.first()
-    val TnoheadRDD = filteredRDD.filter(!_.sameElements(Theader))
-    
-    // Convert records of the RDD (people) to Rows
-    val TrowRDD = TnoheadRDD.map(attributes => Row.fromSeq(attributes))
-
     // Apply the schema to the RDD
-    val TinputDF = spark.createDataFrame(TrowRDD, tschema)
+    val TinputDF = rdd2DF(spark,filteredRDD)
     
     //Writing the intermediate result with unnecessary columns removed
     TinputDF.write.format("csv").option("header", "true").save(output+"/Tsamplingid")
@@ -186,37 +178,13 @@ object BirdClassifier {
 
     //TODO: Move pre-processing to a function that takes the required values, as test data also needs to be preprocessed
     //String indexing the LOC_ID field and dropping the column
-    var Tindexer = new StringIndexer()
 
-    //val TlabelDF = TautoDF.select(labelName).map{v =>
-    //  if (v.get(0).equals("0")) 0.0 else 1.0
-    //}
-    
     val TSid = TautoDF.select("SAMPLING_EVENT_ID")
     TautoDF = TautoDF.drop("SAMPLING_EVENT_ID")
-
     TautoDF = TautoDF.drop(labelName)
 
     //Fill null values
-    TautoDF = TautoDF.na.fill("__HEREBE_DRAGONS__", x)
-
-    //Indexing all the columns
-    for (xname <- x) {
-      Tindexer = new StringIndexer()
-      .setInputCol(xname)
-      .setOutputCol(s"${xname}_INDEX")
-      TautoDF = Tindexer.fit(TautoDF).transform(TautoDF)
-    }
-
-
-    //Removing columns with the null values as it wont help in classification
-    val TnullCols = TautoDF.schema.fields.filter(_.dataType == StringType).map(_.name)
-    for(col <- TnullCols) {
-      TautoDF = TautoDF.drop(col)
-    }
-
-    //Filling null values with 0
-    TautoDF = TautoDF.na.fill(0)
+    TautoDF = DFnullFix(TautoDF,labelName);
 
     //Initializing the vector assembler to convert the cols to single feature vector
     val Tassembler = new VectorAssembler().setInputCols(TautoDF.columns).setOutputCol("features")
@@ -224,16 +192,9 @@ object BirdClassifier {
 
     val TrfPredictions = rfModel.transform(TfeatureDF)
     
-    //TrfPredictions.select("label", "prediction").rdd.saveAsTextFile(output+"/Tpredict")
-    //write.format("csv").option("header", "true").save(output+"/Tpredict")
     val TzippedRDD = TrfPredictions.select("prediction").rdd.zip(TSid.rdd).map{case (Row(prediction), Row(id)) => (id.toString(),prediction.toString())}
     TzippedRDD.coalesce(3).saveAsTextFile(output+"/Tout")
 
-    //Take the label and prediction of the test data and get the accuracy.
-    //val Tevaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
-    //val Taccuracy = Tevaluator.evaluate(TrfPredictions)
-    //println("Accuracy for Ttest set = " + Taccuracy)
-    //println("Test Error for Ttest set = " + (1.0 - Taccuracy))
 
     //Stopping the spark session
     spark.stop()
