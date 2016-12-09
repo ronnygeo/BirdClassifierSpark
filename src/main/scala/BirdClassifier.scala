@@ -33,7 +33,8 @@ object BirdClassifier {
     var input: String = "labeled-small.csv"
     var output:String = "output"
     val numPartitions = 10
-    val numTrees = 10
+
+//    val numTrees = 10
 
   //TODO: Implement numPartitions while reading data
 
@@ -49,18 +50,15 @@ object BirdClassifier {
       p1 ++ (p2.drop(offset))
     }
 
-    //Loading the input files and getting the training set
-    val inputRDD = sc.textFile(input).map(line => line.split(",")).persist()
+    val labelName = "Agelaius_phoeniceus"
 
-  //TODO: Convert all to map partitions
-    var labelRDD = inputRDD.map(arr => arr(26))
-    val labelName = labelRDD.take(1)(0)
-    val labelDF = labelRDD.filter(!_.equals(labelName)).map(v => !v.equals("0")).toDF(labelName).cache()
+    //Loading the input files and getting the training set
+    val inputRDD = sc.textFile(input,numPartitions).map(line => line.split(","))
 
 
     //Removing all duplicate columns
     val newRDD = inputRDD.map{arr =>
-      splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 936), 80, 2), 17, 1), 15, 1), 0, 1)
+      splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1)
     }
 
     // Generate the schema based on the string of schema
@@ -69,25 +67,28 @@ object BirdClassifier {
 
     val header = newRDD.first()
     val noheadRDD = newRDD.filter(!_.sameElements(header))
-    
+
     // Convert records of the RDD (people) to Rows
     val rowRDD = noheadRDD.map(attributes => Row.fromSeq(attributes))
 
     // Apply the schema to the RDD
     val inputDF = spark.createDataFrame(rowRDD, schema)
-    
+
     //Writing the intermediate result with unnecessary columns removed
     inputDF.write.format("csv").option("header", "true").save(output+"/samplingid")
 
-    //TODO: Look at loading it directly without writing to csv
     //Reading the intermediate result from disk and persist
-    var autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid").cache()
+    var autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid").repartition(numPartitions)
 
+    //TODO: Move pre-processing to a function that takes the required values, as test data also needs to be preprocessed
     //String indexing the LOC_ID field and dropping the column
     var indexer = new StringIndexer()
 
-    //One hot encoder
-//    var encoder = new OneHotEncoder()
+    val labelDF = autoDF.select(labelName).map{v =>
+      if (v.get(0).equals("0")) 0.0 else 1.0
+    }
+
+    autoDF = autoDF.drop(labelName)
 
     //Columns with String values
     val x = List("LOC_ID", "COUNTRY","STATE_PROVINCE","COUNTY","COUNT_TYPE","BAILEY_ECOREGION","SUBNATIONAL2_CODE")
@@ -98,11 +99,9 @@ object BirdClassifier {
     //Indexing all the columns
     for (xname <- x) {
       indexer = new StringIndexer()
-      .setInputCol(xname)
-      .setOutputCol(s"${xname}_INDEX")
+        .setInputCol(xname)
+        .setOutputCol(s"${xname}_INDEX")
       autoDF = indexer.fit(autoDF).transform(autoDF)
-      //Dropping the columns
-      autoDF = autoDF.drop(xname)
     }
 
 
@@ -113,39 +112,21 @@ object BirdClassifier {
     }
 
     //Filling null values with 0
-    autoDF = autoDF.na.fill(0)
+    autoDF = autoDF.na.fill(10)
 
     //Initializing the vector assembler to convert the cols to single feature vector
     val assembler = new VectorAssembler().setInputCols(autoDF.columns).setOutputCol("features")
-    val featureDF = assembler.transform(autoDF).select("features").cache()
+    val featureDF = assembler.transform(autoDF).select("features")
 
     //Feature scaler to scale the features
     val scaler = new StandardScaler().setInputCol("features").setOutputCol("scaled_features").fit(featureDF)
     val scaledDF = scaler.transform(featureDF).select($"scaled_features".alias("features"))
-    //.map(_.getAs[Vector]("scaled_features").toArray)
 
+    val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), label)}
+    val data = zippedRDD.toDF("features", "label")
 
-    val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), if (label.getBoolean(0)) 1.0 else 0.0)}
-
-    // Converting to Labeled Point Class in case of RDD
-    // val dataRDD = zippedRDD.map{case (feature, label) => LabeledPoint(label, feature)}
-
-    //Converting the joined RDD to DF
-    val data = zippedRDD.toDF("features", "label").cache()
-
-    //Doing a split of the input to training and test
     val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
 
-    //Create a list of features
-
-
-    //Choose m features from the list of features with a probability randomly
-
-
-    //split the training data into random subsets using probability
-
-
-    //Pass the subset of features and training data to decision tree classifier
 
     // Train a LogisticRegression model.
     val lr = new LogisticRegression()
