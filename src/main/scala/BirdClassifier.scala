@@ -33,10 +33,10 @@ object BirdClassifier {
     var input: String = "labeled-small.csv.bz2"
     var output:String = "output"
     val numPartitions = 10
-    val numFolds = 3
+    val numFolds = 5
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
-    val numTrees = 30
+    val numTrees = 57
 
 
     //TODO: Implement numPartitions while reading data
