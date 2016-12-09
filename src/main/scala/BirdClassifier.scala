@@ -15,7 +15,7 @@ object BirdClassifier {
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf()
       .setAppName("Bird Classifier")
-     .setMaster("local[*]")
+//     .setMaster("local[*]")
 
     val spark = SparkSession
       .builder()
@@ -33,11 +33,11 @@ object BirdClassifier {
     var input: String = "labeled-small.csv.bz2"
     var output:String = "output"
     val numPartitions = 25
-    val numFolds = 5
+    val numFolds = 3
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
-    val numTrees = 51
-    val numPCA = 200
+    val numTrees = 17
+    val numPCA = 300
 
 
     //TODO: Implement numPartitions while reading data
