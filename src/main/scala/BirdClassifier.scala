@@ -30,14 +30,14 @@ object BirdClassifier {
     //Initializing constants
     var time = System.currentTimeMillis()
 
-    var input: String = "labeled-small.csv"
+    var input: String = "labeled-small.csv.bz2"
     var output:String = "output"
-    val numPartitions = 50
-    val numTrees = 20
-    val numFolds = 3
-    val numPCA = 650
+    val numPartitions = 25
+    val numFolds = 5
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
+    val numTrees = 51
+    val numPCA = 200
 
 
     //TODO: Implement numPartitions while reading data
@@ -58,7 +58,8 @@ object BirdClassifier {
     }
 
     //Loading the input files and getting the training set
-    val inputRDD = sc.textFile(input, numPartitions).map(line => line.split(","))
+    val inputRDD = sc.textFile(input,numPartitions).map(line => line.split(","))
+
 
     //Removing all duplicate columns
     val newRDD = inputRDD.map{arr =>
@@ -71,19 +72,19 @@ object BirdClassifier {
 
     val header = newRDD.first()
     val noheadRDD = newRDD.filter(!_.sameElements(header))
-    
+
     // Convert records of the RDD (people) to Rows
     val rowRDD = noheadRDD.map(attributes => Row.fromSeq(attributes))
 
     // Apply the schema to the RDD
     val inputDF = spark.createDataFrame(rowRDD, schema)
-    
+
     //Writing the intermediate result with unnecessary columns removed
-    inputDF.write.format("csv").option("header", "true").save("temp")
+    inputDF.write.format("csv").option("header", "true").save(output+"/samplingid")
 
     //TODO: Look at loading it directly without writing to csv
     //Reading the intermediate result from disk and persist
-    var autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load("temp").repartition(numPartitions)
+    var autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid").repartition(numPartitions)
 
     //TODO: Move pre-processing to a function that takes the required values, as test data also needs to be preprocessed
     //String indexing the LOC_ID field and dropping the column
@@ -104,11 +105,9 @@ object BirdClassifier {
     //Indexing all the columns
     for (xname <- x) {
       indexer = new StringIndexer()
-      .setInputCol(xname)
-      .setOutputCol(s"${xname}_INDEX")
+        .setInputCol(xname)
+        .setOutputCol(s"${xname}_INDEX")
       autoDF = indexer.fit(autoDF).transform(autoDF)
-      //Dropping the columns
-      autoDF = autoDF.drop(xname)
     }
 
 
@@ -121,6 +120,7 @@ object BirdClassifier {
     //Filling null values with 0
     autoDF = autoDF.na.fill(0)
 
+
     //Initializing the vector assembler to convert the cols to single feature vector
     val assembler = new VectorAssembler().setInputCols(autoDF.columns).setOutputCol("features")
     val featureDF = assembler.transform(autoDF).select("features")
@@ -128,6 +128,7 @@ object BirdClassifier {
     //Feature scaler to scale the features
     val scaler = new StandardScaler().setInputCol("features").setOutputCol("scaled_features").fit(featureDF)
     val scaledDF = scaler.transform(featureDF).select($"scaled_features".alias("features"))
+
 
     val pca = new PCA()
       .setInputCol("features")
@@ -137,34 +138,28 @@ object BirdClassifier {
     val pcaDF = pca.transform(scaledDF)
     val fDF = pcaDF.select($"pcaFeatures".alias("features"))
 
-//    val fDF = scaledDF
     val zippedRDD = fDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), label)}
     val data = zippedRDD.toDF("features", "label")
 
-    val Array(trainingData, testData) = data.randomSplit(Array(0.8, 0.2))
+    val Array(trainingData, testData) = data.randomSplit(Array(0.9, 0.1))
 
     //Using default random forest classifier
     val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(numTrees)
-//    rfClassifier.fit(trainingData)
-
     val pipeline = new Pipeline().setStages(Array(rfClassifier))
-
     val paramGrid = new ParamGridBuilder().build() // No parameter search
-
     val cvEvaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
-
     val cv = new CrossValidator().setEstimator(pipeline).setEvaluator(cvEvaluator).setEstimatorParamMaps(paramGrid).setNumFolds(numFolds)
 
     val rfModel = cv.fit(trainingData)
     val rfPredictions = rfModel.transform(testData)
-
-    rfPredictions.select("prediction").write.format("csv").option("header", "true").save(output)
 
     //Take the label and prediction of the test data and get the accuracy.
     val evaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
     val accuracy = evaluator.evaluate(rfPredictions)
     println("Accuracy for test set = " + accuracy)
     println("Test Error for test set = " + (1.0 - accuracy))
+
+    rfPredictions.coalesce(3).select("prediction").rdd.saveAsTextFile(output+"/Tout")
 
     //Stopping the spark session
     spark.stop()
