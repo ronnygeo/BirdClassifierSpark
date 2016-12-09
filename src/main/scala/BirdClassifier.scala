@@ -55,7 +55,6 @@ object BirdClassifier {
       val (p1, p2) = arr.splitAt(s)
       p1 ++ (p2.drop(offset))
     }
-
     //Loading the input files and getting the training set
     val inputRDD = sc.textFile(input,numPartitions).map(line => line.split(","))
 
@@ -81,7 +80,6 @@ object BirdClassifier {
     //Writing the intermediate result with unnecessary columns removed
     inputDF.write.format("csv").option("header", "true").save(output+"/samplingid")
 
-    //TODO: Look at loading it directly without writing to csv
     //Reading the intermediate result from disk and persist
     var autoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/samplingid").repartition(numPartitions)
 
@@ -117,7 +115,7 @@ object BirdClassifier {
     }
 
     //Filling null values with 0
-    autoDF = autoDF.na.fill(-1)
+    autoDF = autoDF.na.fill(10)
 
     //Initializing the vector assembler to convert the cols to single feature vector
     val assembler = new VectorAssembler().setInputCols(autoDF.columns).setOutputCol("features")
@@ -130,7 +128,7 @@ object BirdClassifier {
     val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), label)}
     val data = zippedRDD.toDF("features", "label")
 
-    val Array(trainingData, testData) = data.randomSplit(Array(0.9, 0.1))
+    val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
 
     //Using default random forest classifier
     val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(numTrees)
