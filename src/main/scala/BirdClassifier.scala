@@ -33,8 +33,10 @@ object BirdClassifier {
     var input: String = "labeled-small.csv.bz2"
     var output:String = "output"
     val numPartitions = 10
+    val numFolds = 3
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
+    val numTrees = 30
 
 
     //TODO: Implement numPartitions while reading data
@@ -55,7 +57,7 @@ object BirdClassifier {
     }
 
     //Loading the input files and getting the training set
-    val inputRDD = sc.textFile(input,2).map(line => line.split(",")).persist()
+    val inputRDD = sc.textFile(input,numPartitions).map(line => line.split(","))
 
 
     //Removing all duplicate columns
@@ -78,7 +80,6 @@ object BirdClassifier {
     
     //Writing the intermediate result with unnecessary columns removed
     inputDF.write.format("csv").option("header", "true").save(output+"/samplingid")
-    inputRDD.unpersist()
 
     //TODO: Look at loading it directly without writing to csv
     //Reading the intermediate result from disk and persist
@@ -107,7 +108,7 @@ object BirdClassifier {
       .setOutputCol(s"${xname}_INDEX")
       autoDF = indexer.fit(autoDF).transform(autoDF)
       //Dropping the columns
-      autoDF = autoDF.drop(xname)
+//      autoDF = autoDF.drop(xname)
     }
 
 
@@ -131,11 +132,10 @@ object BirdClassifier {
     val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map{case (features, label) => (features.getAs[Vector](0), label)}
     val data = zippedRDD.toDF("features", "label")
 
-    val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
+//    val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
 
     //Using default random forest classifier
-    val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(10)
-    rfClassifier.fit(trainingData)
+    val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(numTrees)
 
     val pipeline = new Pipeline().setStages(Array(rfClassifier))
 
@@ -143,20 +143,19 @@ object BirdClassifier {
 
     val cvEvaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
 
-    val cv = new CrossValidator().setEstimator(pipeline).setEvaluator(cvEvaluator).setEstimatorParamMaps(paramGrid).setNumFolds(5)
+    val cv = new CrossValidator().setEstimator(pipeline).setEvaluator(cvEvaluator).setEstimatorParamMaps(paramGrid).setNumFolds(numFolds)
 
-    val rfModel = cv.fit(trainingData)
-    val rfPredictions = rfModel.transform(testData)
+    val rfModel = cv.fit(data)
 
-    //Take the label and prediction of the test data and get the accuracy.
-    val evaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
-    val accuracy = evaluator.evaluate(rfPredictions)
-    println("Accuracy for test set = " + accuracy)
-    println("Test Error for test set = " + (1.0 - accuracy))
+//    //Take the label and prediction of the test data and get the accuracy.
+//    val evaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
+//    val accuracy = evaluator.evaluate(rfPredictions)
+//    println("Accuracy for test set = " + accuracy)
+//    println("Test Error for test set = " + (1.0 - accuracy))
     
     
     //Loading the input files and getting the training set
-    val testRDD = sc.textFile(test,2).map(line => line.split(",")).persist()
+    val testRDD = sc.textFile(test, numPartitions).map(line => line.split(",")).persist()
 
 
     //Removing all duplicate columns
@@ -198,9 +197,6 @@ object BirdClassifier {
 
     TautoDF = TautoDF.drop(labelName)
 
-    //Columns with String values
-    //val Tx = List("LOC_ID", "COUNTRY","STATE_PROVINCE","COUNTY","COUNT_TYPE","BAILEY_ECOREGION","SUBNATIONAL2_CODE")
-
     //Fill null values
     TautoDF = TautoDF.na.fill("__HEREBE_DRAGONS__", x)
 
@@ -210,8 +206,6 @@ object BirdClassifier {
       .setInputCol(xname)
       .setOutputCol(s"${xname}_INDEX")
       TautoDF = Tindexer.fit(TautoDF).transform(TautoDF)
-      //Dropping the columns
-      TautoDF = TautoDF.drop(xname)
     }
 
 
@@ -228,34 +222,12 @@ object BirdClassifier {
     val Tassembler = new VectorAssembler().setInputCols(TautoDF.columns).setOutputCol("features")
     val TfeatureDF = Tassembler.transform(TautoDF).select("features")
 
-    //Feature scaler to scale the features
-    //val Tscaler = new StandardScaler().setInputCol("features").setOutputCol("scaled_features").fit(TfeatureDF)
-    //val TscaledDF = Tscaler.transform(TfeatureDF).select($"scaled_features".alias("features"))
-
-    //val TzippedRDD = TscaledDF.rdd.map{case (features) => (features.getAs[Vector](0))}
-    //val Tdata = TzippedRDD.toDF("features")
-
-    //val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
-
-    //Using default random forest classifier
-    //val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(10)
-    //rfClassifier.fit(trainingData)
-
-    //val pipeline = new Pipeline().setStages(Array(rfClassifier))
-
-    //val paramGrid = new ParamGridBuilder().build() // No parameter search
-
-    //val cvEvaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
-
-    //val cv = new CrossValidator().setEstimator(pipeline).setEvaluator(cvEvaluator).setEstimatorParamMaps(paramGrid).setNumFolds(5)
-
-    //val rfModel = cv.fit(trainingData)
     val TrfPredictions = rfModel.transform(TfeatureDF)
     
     //TrfPredictions.select("label", "prediction").rdd.saveAsTextFile(output+"/Tpredict")
     //write.format("csv").option("header", "true").save(output+"/Tpredict")
     val TzippedRDD = TrfPredictions.select("prediction").rdd.zip(TSid.rdd).map{case (Row(prediction), Row(id)) => (id.toString(),prediction.toString())}
-    TzippedRDD.saveAsTextFile(output+"/Tout")
+    TzippedRDD.coalesce(3).saveAsTextFile(output+"/Tout")
 
     //Take the label and prediction of the test data and get the accuracy.
     //val Tevaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
