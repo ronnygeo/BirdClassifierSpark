@@ -36,7 +36,7 @@ object BirdClassifier {
     val numFolds = 5
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
-    val numTrees = 57
+    val numTrees = 75
 
 
     //TODO: Implement numPartitions while reading data
