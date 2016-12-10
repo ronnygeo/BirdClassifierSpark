@@ -19,18 +19,14 @@ object BirdClassifier {
   def main(args: Array[String]): Unit = {
     //Initializing constants
     var time = System.currentTimeMillis()
-
     var input: String = "labeled-train.csv"
     var output: String = "output"
-    val numPartitions = 10
+    val numPartitions = 25
     val numFolds = 7
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
     val numTrees = 9
-    val probDataSample = 0.5
-
-
-    //TODO: Implement numPartitions while reading data
+    val probDataSample = 0.8
 
     //if output is specified, use that else default
     if (args.length > 1) {
@@ -41,15 +37,18 @@ object BirdClassifier {
       }
     }
 
+    //Setting spark configuration
     val conf = new SparkConf()
       .setAppName("Bird Classifier")
       .setMaster("local[*]")
 
+    //Getting the spark session
     val spark = SparkSession
       .builder()
       .config(conf)
       .getOrCreate()
 
+    //Getting spark Context
     val sc = spark.sparkContext
 
     // For implicit conversions like converting RDDs to DataFrames
@@ -67,14 +66,15 @@ object BirdClassifier {
 
 
     //Removing all duplicate columns
-    val newRDD = inputRDD.mapPartitions{ arr =>
-      var itr: Array[Array[String]] = null
-      while(arr.hasNext) {
-        val data = arr.next()
-        itr = splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(data, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1) ::: itr
-      }
-      itr.iterator
-    }
+    val newRDD = inputRDD.map(arr => splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1))
+    //    val newRDD = inputRDD.mapPartitions{ arr =>
+    //      var itr: Array[Array[String]] = null
+    //      while(arr.hasNext) {
+    //        val data = arr.next()
+    //        itr = splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(data, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1) ::: itr
+    //      }
+    //      itr.iterator
+    //    }
 
     // Apply the schema to the RDD
     val inputDF = rdd2DF(spark, newRDD)
@@ -82,17 +82,17 @@ object BirdClassifier {
     //Writing the intermediate result with unnecessary columns removed
     inputDF.write.format("csv").option("nullValue", "?").option("header", "true").save(output + "/samplingid")
 
-    //TODO: Look at loading it directly without writing to csv
     //Reading the intermediate result from disk and persist
     var autoDF = spark.read.format("csv").option("header", "true").option("nullValue", "?").option("inferSchema", "true").load(output + "/samplingid").repartition(numPartitions)
 
-    //TODO: Move pre-processing to a function that takes the required values, as test data also needs to be preprocessed
     //String indexing the LOC_ID field and dropping the column
 
+    //Moving the labels to a new DF
     val labelDF = autoDF.select(labelName).map { v =>
       if (v.get(0).equals("0")) 0.0 else 1.0
     }
 
+    //Process null values
     autoDF = DFnullFix(autoDF, labelName)
 
     //Initializing the vector assembler to convert the cols to single feature vector
@@ -103,28 +103,31 @@ object BirdClassifier {
     val scaler = new StandardScaler().setInputCol("features").setOutputCol("scaled_features").fit(featureDF)
     val scaledDF = scaler.transform(featureDF).select($"scaled_features".alias("features"))
 
+    //Combine both DFs to one and convert to a new DF
     val zippedRDD = scaledDF.rdd.zip(labelDF.rdd).map { case (features, label) => (features.getAs[Vector](0), label) }
     val data = zippedRDD.toDF("features", "label")
 
+    //Splitting train/test data
     val Array(trainingData, validationData) = data.randomSplit(Array(0.7, 0.3))
 
+    //List to store the models
     var modelsT = new ListBuffer[CrossValidatorModel]()
 
-    //TODO: Sample data randomly from the input and pass to decision tree classifiers
+    //Sample data randomly from the input and pass to numTrees decision tree classifiers
     for (i <- 0 until numTrees) {
-    //Using default random forest classifier
       val subTrainDF = trainingData.sample(true, probDataSample)
-    val dt = new DecisionTreeClassifier().setLabelCol("label").setFeaturesCol("features")
-    val pipeline = new Pipeline().setStages(Array(dt))
-    val paramGrid = new ParamGridBuilder().build()
-    // No parameter search
-    val cvEvaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
-    val cv = new CrossValidator().setEstimator(pipeline).setEvaluator(cvEvaluator).setEstimatorParamMaps(paramGrid).setNumFolds(numFolds)
-    cv.fit(trainingData).save("model"+i)
-  }
-//    val models = sc.parallelize(modelsT.toList)
+      val dt = new DecisionTreeClassifier().setLabelCol("label").setFeaturesCol("features")
+      val pipeline = new Pipeline().setStages(Array(dt))
+      val paramGrid = new ParamGridBuilder().build()
+      // No parameter search
+      val cvEvaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
+      val cv = new CrossValidator().setEstimator(pipeline).setEvaluator(cvEvaluator).setEstimatorParamMaps(paramGrid).setNumFolds(numFolds)
+      modelsT += cv.fit(trainingData)
+    }
+
+    //    val models = sc.parallelize(modelsT.toList)
     val models = modelsT.toList
-    val labelRDD = validationData.select("label").rdd
+    val labelRDD = validationData.select("label").rdd.map(row => row.getDouble(0))
 
     val predictionsRDD = getPredictions(validationData, models)
     val zTestDF = labelRDD.zip(predictionsRDD).toDF("label", "prediction")
@@ -148,7 +151,7 @@ object BirdClassifier {
 
     // Apply the schema to the RDD
     val TinputDF = rdd2DF(spark,filteredRDD)
-    
+
     //Writing the intermediate result with unnecessary columns removed
     TinputDF.write.format("csv").option("header", "true").save(output+"/Tsamplingid")
     testRDD.unpersist()
@@ -226,12 +229,12 @@ object BirdClassifier {
   }
 
   //Gets the predictions from multiple models and gets the majority value
-  def getPredictions(validationData: DataFrame, numTrees: Int): RDD[Double] = {
-    val modelsT: ListBuffer[CrossValidatorModel] = null
-    for (i <- 0 until numTrees) {
-      modelsT += CrossValidatorModel.load("model"+i)
-    }
-    val models = modelsT.toList
+  def getPredictions(validationData: DataFrame, models: List[CrossValidatorModel]): RDD[Double] = {
+    //    val modelsT: ListBuffer[CrossValidatorModel] = null
+    //    for (i <- 0 until numTrees) {
+    //      modelsT += CrossValidatorModel.load("model"+i)
+    //    }
+    //    val models = modelsT.toList
     val predictions = models.map{model => model.transform(validationData).select("prediction").rdd.map(row => row.getDouble(0))}
     predictions.head.zip(predictions(1)).zip(predictions(2)).map(line => (line._1._1, line._1._2, line._2)).zip(predictions(3)).zip(predictions(4)).map(line => (line._1._1._1, line._1._1._2, line._1._1._3, line._1._2, line._2)).zip(predictions(5)).zip(predictions(6)).map(line => (line._1._1._1, line._1._1._2, line._1._1._3, line._1._1._4, line._1._1._5, line._1._2, line._2)).zip(predictions(7)).zip(predictions(8)).map(line => (line._1._1._1, line._1._1._2, line._1._1._3, line._1._1._4, line._1._1._5, line._1._1._6, line._1._1._7, line._1._2, line._2)).map { line =>
       var count0 = 0
