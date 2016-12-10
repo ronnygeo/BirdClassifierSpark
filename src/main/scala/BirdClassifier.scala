@@ -18,7 +18,7 @@ object BirdClassifier {
     //Initializing constants
     var time = System.currentTimeMillis()
 
-    var input: String = "labeled-small.csv.bz2"
+    var input: String = "labeled-train.csv"
     var output:String = "output"
     val numPartitions = 10
     val numFolds = 5
@@ -80,7 +80,6 @@ object BirdClassifier {
 
     //TODO: Move pre-processing to a function that takes the required values, as test data also needs to be preprocessed
     //String indexing the LOC_ID field and dropping the column
-    //var indexer = new StringIndexer()
 
     val labelDF = autoDF.select(labelName).map{v =>
       if (v.get(0).equals("0")) 0.0 else 1.0
@@ -102,8 +101,7 @@ object BirdClassifier {
     val Array(trainingData, validationData) = data.randomSplit(Array(0.7, 0.3))
 
     //Using default random forest classifier
-    val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(numTrees)
-      .setFeatureSubsetStrategy("0.7")
+    val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(numTrees).setFeatureSubsetStrategy("0.5")
 
     val pipeline = new Pipeline().setStages(Array(rfClassifier))
 
@@ -150,7 +148,7 @@ object BirdClassifier {
     TautoDF = TautoDF.drop(labelName)
 
     //Fill null values
-    TautoDF = DFnullFix(TautoDF,labelName);
+    TautoDF = DFnullFix(TautoDF,labelName)
 
     //Initializing the vector assembler to convert the cols to single feature vector
     val Tassembler = new VectorAssembler().setInputCols(TautoDF.columns).setOutputCol("features")
@@ -159,12 +157,12 @@ object BirdClassifier {
     val TrfPredictions = rfModel.transform(TfeatureDF)
     
     val TzippedRDD = TrfPredictions.select("prediction").rdd.zip(TSid.rdd).map{case (Row(prediction), Row(id)) => (id.toString(),prediction.toString())}
-    TzippedRDD.coalesce(3).saveAsTextFile(output+"/Tout")
-
+    TzippedRDD.saveAsTextFile(output+"/Tout")
 
     //Stopping the spark session
     spark.stop()
   }
+
   def rdd2DF(spark : SparkSession,ipRDD : RDD[Array[String]]) : DataFrame ={
     val fields = ipRDD.take(1)(0).map(fieldName => StructField(fieldName, StringType, nullable = true))
     val schema = StructType(fields)
@@ -201,7 +199,6 @@ object BirdClassifier {
 //        .setOutputCol(s"${xname}_CATEGORY")
 //      df = encoder.transform(df)
     }
-
 
     //Removing columns with the null values and Strings as it wont help in classification
     val nullCols = df.schema.fields.filter(_.dataType == StringType).map(_.name)
