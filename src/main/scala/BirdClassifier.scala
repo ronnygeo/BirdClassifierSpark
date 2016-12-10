@@ -1,12 +1,15 @@
 import org.apache.spark.ml.classification.RandomForestClassifier
 import org.apache.spark.SparkConf
 import org.apache.spark.ml.Pipeline
-import org.apache.spark.ml.evaluation.{MulticlassClassificationEvaluator}
-import org.apache.spark.sql.{Row, SparkSession}
+import org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
 import org.apache.spark.ml.feature._
 import org.apache.spark.ml.linalg.Vector
-import org.apache.spark.ml.tuning.{CrossValidator, ParamGridBuilder}
+import org.apache.spark.ml.tuning.{CrossValidator, CrossValidatorModel, ParamGridBuilder}
+import org.apache.spark.rdd.RDD
+
+import scala.collection.mutable.ListBuffer
 
 /**
   * Created by ronnygeo on 12/1/16.
@@ -130,23 +133,34 @@ object BirdClassifier {
 
     val Array(trainingData, testData) = data.randomSplit(Array(0.7, 0.3))
 
-    //Using default random forest classifier
-    val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(numTrees)
-    val pipeline = new Pipeline().setStages(Array(rfClassifier))
-    val paramGrid = new ParamGridBuilder().build() // No parameter search
-    val cvEvaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
-    val cv = new CrossValidator().setEstimator(pipeline).setEvaluator(cvEvaluator).setEstimatorParamMaps(paramGrid).setNumFolds(numFolds)
+    val modelsT: ListBuffer[CrossValidatorModel] = null
+    for (i <- 0 until numTrees) {
+      val tdata = trainingData.sample(true, 0.3)
+      //Using default random forest classifier
+      val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(numTrees)
+      val pipeline = new Pipeline().setStages(Array(rfClassifier))
+      val paramGrid = new ParamGridBuilder().build()
+      // No parameter search
+      val cvEvaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
+      val cv = new CrossValidator().setEstimator(pipeline).setEvaluator(cvEvaluator).setEstimatorParamMaps(paramGrid).setNumFolds(numFolds)
 
-    val rfModel = cv.fit(trainingData)
-    val rfPredictions = rfModel.transform(testData)
+      modelsT += cv.fit(tdata)
+    }
+
+    val models = sc.parallelize(modelsT.toList)
+
+    def transformTest(testData: DataFrame): Unit = {
+      val predictions: ListBuffer[RDD[String]] = null
+      models.map{model =>
+              predictions += model.transform(testData).select("prediction").rdd.map(row => row.getString(0))
+            }
+    }
 
     //Take the label and prediction of the test data and get the accuracy.
     val evaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
     val accuracy = evaluator.evaluate(rfPredictions)
     println("Accuracy for test set = " + accuracy)
     println("Test Error for test set = " + (1.0 - accuracy))
-
-    rfPredictions.select("prediction").write.format("csv").option("header", "true").save(output+"/Tout")
 
     //Stopping the spark session
     spark.stop()
