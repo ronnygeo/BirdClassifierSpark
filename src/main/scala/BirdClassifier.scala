@@ -1,7 +1,7 @@
 import org.apache.spark.ml.classification.RandomForestClassifier
 import org.apache.spark.SparkConf
 import org.apache.spark.ml.Pipeline
-import org.apache.spark.ml.evaluation.{MulticlassClassificationEvaluator}
+import org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
 import org.apache.spark.ml.feature._
@@ -9,6 +9,8 @@ import org.apache.spark.ml.linalg.Vector
 import org.apache.spark.ml.tuning.{CrossValidator, ParamGridBuilder}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.DataFrame
+
+import scala.collection.mutable.ListBuffer
 
 /**
   * Created by ronnygeo on 12/1/16.
@@ -18,10 +20,10 @@ object BirdClassifier {
     //Initializing constants
     var time = System.currentTimeMillis()
 
-    var input: String = "labeled-small.csv.bz2"
+    var input: String = "labeled-train.csv"
     var output:String = "output"
-    val numPartitions = 10
-    val numFolds = 5
+    val numPartitions = 25
+    val numFolds = 7
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
     val numTrees = 14
@@ -40,7 +42,7 @@ object BirdClassifier {
 
     val conf = new SparkConf()
       .setAppName("Bird Classifier")
-     .setMaster("local[*]")
+//     .setMaster("local[4]")
 
     val spark = SparkSession
       .builder()
@@ -68,8 +70,17 @@ object BirdClassifier {
       splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1)
     }
 
+//    val newRDD = inputRDD.mapPartitions{ arr =>
+//      var itr: List[Array[String]] = List()
+//      while(arr.hasNext) {
+//        val data = arr.next()
+//        itr = List(splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(data, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1)) ::: itr
+//      }
+//      itr.iterator
+//    }
+
     // Apply the schema to the RDD
-    val inputDF = rdd2DF(spark,newRDD)
+    val inputDF = rdd2DF(spark, newRDD)
     
     //Writing the intermediate result with unnecessary columns removed
     inputDF.write.format("csv").option("nullValue","?").option("header", "true").save(output+"/samplingid")
@@ -123,7 +134,7 @@ object BirdClassifier {
     println("Test Error for test set = " + (1.0 - accuracy))
 
     //Loading the input files and getting the training set
-    val testRDD = sc.textFile(test, numPartitions).map(line => line.split(",")).persist()
+    val testRDD = sc.textFile(test, numPartitions).map(line => line.split(","))
 
 
     //Removing all duplicate columns
@@ -136,7 +147,6 @@ object BirdClassifier {
     
     //Writing the intermediate result with unnecessary columns removed
     TinputDF.write.format("csv").option("header", "true").save(output+"/Tsamplingid")
-    testRDD.unpersist()
 
     //TODO: Look at loading it directly without writing to csv
     //Reading the intermediate result from disk and persist
@@ -150,7 +160,7 @@ object BirdClassifier {
     TautoDF = TautoDF.drop(labelName)
 
     //Fill null values
-    TautoDF = DFnullFix(TautoDF,labelName);
+    TautoDF = DFnullFix(TautoDF,labelName)
 
     //Initializing the vector assembler to convert the cols to single feature vector
     val Tassembler = new VectorAssembler().setInputCols(TautoDF.columns).setOutputCol("features")
@@ -165,6 +175,7 @@ object BirdClassifier {
     //Stopping the spark session
     spark.stop()
   }
+
   def rdd2DF(spark : SparkSession,ipRDD : RDD[Array[String]]) : DataFrame ={
     val fields = ipRDD.take(1)(0).map(fieldName => StructField(fieldName, StringType, nullable = true))
     val schema = StructType(fields)
@@ -195,13 +206,7 @@ object BirdClassifier {
         .setInputCol(xname)
         .setOutputCol(s"${xname}_INDEX")
       df = indexer.fit(df).transform(df)
-
-//      encoder = new OneHotEncoder()
-//        .setInputCol(s"${xname}_INDEX")
-//        .setOutputCol(s"${xname}_CATEGORY")
-//      df = encoder.transform(df)
     }
-
 
     //Removing columns with the null values and Strings as it wont help in classification
     val nullCols = df.schema.fields.filter(_.dataType == StringType).map(_.name)
