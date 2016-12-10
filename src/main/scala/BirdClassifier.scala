@@ -1,4 +1,4 @@
-import org.apache.spark.ml.classification.{DecisionTreeClassifier, RandomForestClassifier}
+import org.apache.spark.ml.classification.{DecisionTreeClassifier, LogisticRegression, RandomForestClassifier}
 import org.apache.spark.SparkConf
 import org.apache.spark.ml.Pipeline
 import org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
@@ -40,7 +40,7 @@ object BirdClassifier {
     //Setting spark configuration
     val conf = new SparkConf()
       .setAppName("Bird Classifier")
-      .setMaster("local[*]")
+//      .setMaster("local[*]")
 
     //Getting the spark session
     val spark = SparkSession
@@ -67,14 +67,6 @@ object BirdClassifier {
 
     //Removing all duplicate columns
     val newRDD = inputRDD.map(arr => splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1))
-    //    val newRDD = inputRDD.mapPartitions{ arr =>
-    //      var itr: Array[Array[String]] = null
-    //      while(arr.hasNext) {
-    //        val data = arr.next()
-    //        itr = splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(data, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1) ::: itr
-    //      }
-    //      itr.iterator
-    //    }
 
     // Apply the schema to the RDD
     val inputDF = rdd2DF(spark, newRDD)
@@ -116,10 +108,24 @@ object BirdClassifier {
     //Sample data randomly from the input and pass to numTrees decision tree classifiers
     for (i <- 0 until numTrees) {
       val subTrainDF = trainingData.sample(true, probDataSample)
-      val dt = new DecisionTreeClassifier().setLabelCol("label").setFeaturesCol("features")
+
+      //Initializing the Decision Tree Classifier
+      val dt = new DecisionTreeClassifier().setLabelCol("label").setFeaturesCol("features").setMaxBins(300)
       val pipeline = new Pipeline().setStages(Array(dt))
-      val paramGrid = new ParamGridBuilder().build()
+
+      // Train a LogisticRegression model.
+//      val lr = new LogisticRegression()
+//        .setMaxIter(10)
+//        .setRegParam(0.3)
+//        .setElasticNetParam(0.8)
+//
+//      // Chain indexers and tree in a Pipeline.
+//      val pipeline = new Pipeline()
+//        .setStages(Array(lr))
+
       // No parameter search
+      val paramGrid = new ParamGridBuilder().build()
+      //Initialling cross validation
       val cvEvaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
       val cv = new CrossValidator().setEstimator(pipeline).setEvaluator(cvEvaluator).setEstimatorParamMaps(paramGrid).setNumFolds(numFolds)
       modelsT += cv.fit(trainingData)
@@ -141,7 +147,7 @@ object BirdClassifier {
 
     //////////////////////////////////////////////////////////////////////////////////////////
     //Loading the input files and getting the test set
-    val testRDD = sc.textFile(test, numPartitions).map(line => line.split(",")).persist()
+    val testRDD = sc.textFile(test, numPartitions).map(line => line.split(","))
 
 
     //Removing all duplicate columns
@@ -154,7 +160,6 @@ object BirdClassifier {
 
     //Writing the intermediate result with unnecessary columns removed
     TinputDF.write.format("csv").option("header", "true").save(output+"/Tsamplingid")
-    testRDD.unpersist()
 
     //TODO: Look at loading it directly without writing to csv
     //Reading the intermediate result from disk and persist
