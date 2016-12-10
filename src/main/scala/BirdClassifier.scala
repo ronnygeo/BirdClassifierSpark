@@ -42,7 +42,7 @@ object BirdClassifier {
 
     val conf = new SparkConf()
       .setAppName("Bird Classifier")
-//     .setMaster("local[4]")
+//     .setMaster("local[*]")
 
     val spark = SparkSession
       .builder()
@@ -114,7 +114,7 @@ object BirdClassifier {
 
     //Using default random forest classifier
     val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(numTrees)
-      .setFeatureSubsetStrategy("0.7")
+      .setFeatureSubsetStrategy("0.7").setMaxDepth(12).setMaxBins(300)
 
     val pipeline = new Pipeline().setStages(Array(rfClassifier))
 
