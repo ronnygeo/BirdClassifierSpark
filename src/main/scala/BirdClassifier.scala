@@ -23,13 +23,10 @@ object BirdClassifier {
     var input: String = "labeled-train.csv"
     var output:String = "output"
     val numPartitions = 25
-    val numFolds = 7
+    val numFolds = 5
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
     val numTrees = 14
-
-
-    //TODO: Implement numPartitions while reading data
 
     //if output is specified, use that else default
     if (args.length > 1) {
@@ -65,22 +62,20 @@ object BirdClassifier {
     val inputRDD = sc.textFile(input).map(line => line.split(","))
 
 
-    //Removing all duplicate columns
-    val newRDD = inputRDD.map{arr =>
-      splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1)
+    //Removing all duplicate columns with map partitions
+    val header = splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(inputRDD.take(1)(0), 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1)
+    val nRDD = inputRDD.filter(!_(0).equals("SAMPLING_EVENT_ID"))
+    val newRDD = nRDD.mapPartitions{ arr =>
+      var itr: List[Array[String]] = List()
+      while(arr.hasNext) {
+        val data = arr.next()
+        itr = List(splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(data, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1)) ::: itr
+      }
+      itr.iterator
     }
 
-//    val newRDD = inputRDD.mapPartitions{ arr =>
-//      var itr: List[Array[String]] = List()
-//      while(arr.hasNext) {
-//        val data = arr.next()
-//        itr = List(splitArr(splitArr(splitArr(splitArr(splitArr(splitArr(data, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1), 0, 1)) ::: itr
-//      }
-//      itr.iterator
-//    }
-
     // Apply the schema to the RDD
-    val inputDF = rdd2DF(spark, newRDD)
+    val inputDF = rdd2DF(spark, newRDD, header)
     
     //Writing the intermediate result with unnecessary columns removed
     inputDF.write.format("csv").option("nullValue","?").option("header", "true").save(output+"/samplingid")
@@ -114,7 +109,7 @@ object BirdClassifier {
 
     //Using default random forest classifier
     val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(numTrees)
-      .setFeatureSubsetStrategy("0.7").setMaxDepth(12).setMaxBins(300)
+      .setFeatureSubsetStrategy("sqrt").setMaxDepth(11).setMaxBins(200)
 
     val pipeline = new Pipeline().setStages(Array(rfClassifier))
 
@@ -138,22 +133,30 @@ object BirdClassifier {
 
 
     //Removing all duplicate columns
-    val filteredRDD = testRDD.map{arr =>
-      splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1)
+//    val filteredRDD = testRDD.map{arr =>
+//      splitArr(splitArr(splitArr(splitArr(splitArr(arr, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1)
+//    }
+    val outheader = splitArr(splitArr(splitArr(splitArr(splitArr(inputRDD.take(1)(0), 19, 7), 20, 928), 81, 2), 17, 1), 15, 1)
+    val nTRDD = testRDD.filter(!_(0).equals("SAMPLING_EVENT_ID"))
+
+    val filteredRDD = nTRDD.mapPartitions{ arr =>
+      var itr: List[Array[String]] = List()
+      while(arr.hasNext) {
+        val data = arr.next()
+        itr = List(splitArr(splitArr(splitArr(splitArr(splitArr(data, 19, 7), 20, 928), 81, 2), 17, 1), 15, 1)) ::: itr
+      }
+      itr.iterator
     }
 
     // Apply the schema to the RDD
-    val TinputDF = rdd2DF(spark,filteredRDD)
-    
+    val TinputDF = rdd2DF(spark, filteredRDD, outheader)
+
     //Writing the intermediate result with unnecessary columns removed
     TinputDF.write.format("csv").option("header", "true").save(output+"/Tsamplingid")
 
     //TODO: Look at loading it directly without writing to csv
     //Reading the intermediate result from disk and persist
     var TautoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/Tsamplingid").repartition(numPartitions)
-
-    //TODO: Move pre-processing to a function that takes the required values, as test data also needs to be preprocessed
-    //String indexing the LOC_ID field and dropping the column
 
     val TSid = TautoDF.select("SAMPLING_EVENT_ID")
     TautoDF = TautoDF.drop("SAMPLING_EVENT_ID")
@@ -169,18 +172,20 @@ object BirdClassifier {
     val TrfPredictions = rfModel.transform(TfeatureDF)
     
     val TzippedRDD = TrfPredictions.select("prediction").rdd.zip(TSid.rdd).map{case (Row(prediction), Row(id)) => (id.toString(),prediction.toString())}
-    TzippedRDD.coalesce(3).saveAsTextFile(output+"/Tout")
+
+    val outDF = TzippedRDD.toDF("SAMPLING_EVENT_ID", "SAW_AGELAIUS_PHOENICEUS")
+    outDF.coalesce(1).write.format("csv").option("header", "true").save(output+"/testOut")
 
 
     //Stopping the spark session
     spark.stop()
   }
 
-  def rdd2DF(spark : SparkSession,ipRDD : RDD[Array[String]]) : DataFrame ={
-    val fields = ipRDD.take(1)(0).map(fieldName => StructField(fieldName, StringType, nullable = true))
+  def rdd2DF(spark : SparkSession,ipRDD : RDD[Array[String]], header: Array[String]) : DataFrame ={
+    val fields = header.map(fieldName => StructField(fieldName, StringType, nullable = true))
     val schema = StructType(fields)
 
-    val header = ipRDD.first()
+//    val header = ipRDD.first()
     val noheadRDD = ipRDD.filter(!_.sameElements(header))
 
     // Convert records of the RDD (people) to Rows
