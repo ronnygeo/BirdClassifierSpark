@@ -22,11 +22,11 @@ object BirdClassifier {
 
     var input: String = "labeled-train.csv"
     var output:String = "output"
-    val numPartitions = 25
-    val numFolds = 2
+    val numPartitions = 10
+    val numFolds = 3
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
-    val numTrees = 14
+    val numTrees = 27
 
     //if output is specified, use that else default
     if (args.length > 1) {
@@ -39,7 +39,7 @@ object BirdClassifier {
 
     val conf = new SparkConf()
       .setAppName("Bird Classifier")
-     .setMaster("local[*]")
+//     .setMaster("local[*]")
 
     val spark = SparkSession
       .builder()
@@ -109,7 +109,7 @@ object BirdClassifier {
 
     //Using default random forest classifier
     val rfClassifier = new RandomForestClassifier().setLabelCol("label").setFeaturesCol("features").setNumTrees(numTrees)
-      .setFeatureSubsetStrategy("sqrt").setMaxDepth(11).setMaxBins(200)
+//      .setFeatureSubsetStrategy("sqrt").setMaxDepth(8).setMaxBins(150)
 
     val pipeline = new Pipeline().setStages(Array(rfClassifier))
 

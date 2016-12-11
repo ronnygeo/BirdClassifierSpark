@@ -35,7 +35,7 @@ object BirdPredictor {
 
     val conf = new SparkConf()
       .setAppName("Bird ClassifierTest")
-      .setMaster("local[*]")
+//      .setMaster("local[*]")
 
     val spark = SparkSession
       .builder()
