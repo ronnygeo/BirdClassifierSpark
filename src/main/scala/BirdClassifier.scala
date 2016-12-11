@@ -22,7 +22,7 @@ object BirdClassifier {
     var input: String = "labeled-train.csv"
     var output: String = "output"
     val numPartitions = 25
-    val numFolds = 7
+    val numFolds = 2
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
     val numTrees = 9
@@ -183,7 +183,9 @@ object BirdClassifier {
 
     val TrfPredictions = getPredictions(TscaledDF, models)
     val TzippedRDD = TrfPredictions.repartition(5).zip(TSid.rdd).map{case (prediction, id) => (id, prediction)}
-    TzippedRDD.coalesce(2).saveAsTextFile(output+"/Tout")
+
+    val outDF = TzippedRDD.toDF("SAMPLING_EVENT_ID", "SAW_AGELAIUS_PHOENICEUS")
+    outDF.coalesce(1).write.format("csv").option("header", "true").save(output+"/testOut")
 
     //Stopping the spark session
     spark.stop()
