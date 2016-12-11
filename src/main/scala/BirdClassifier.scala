@@ -6,7 +6,7 @@ import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
 import org.apache.spark.ml.feature._
 import org.apache.spark.ml.linalg.Vector
-import org.apache.spark.ml.tuning.{CrossValidator, ParamGridBuilder}
+import org.apache.spark.ml.tuning.{CrossValidator, CrossValidatorModel, ParamGridBuilder}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.DataFrame
 
@@ -23,7 +23,7 @@ object BirdClassifier {
     var input: String = "labeled-train.csv"
     var output:String = "output"
     val numPartitions = 25
-    val numFolds = 5
+    val numFolds = 2
     val labelName = "Agelaius_phoeniceus"
     var test: String = null
     val numTrees = 14
@@ -31,15 +31,15 @@ object BirdClassifier {
     //if output is specified, use that else default
     if (args.length > 1) {
       input = args(0)
-      output = args(1)
-      if (args.length > 2) {
-        test = args(2)
-      }
+//      output = args(1)
+//      if (args.length > 2) {
+//        test = args(2)
+//      }
     }
 
     val conf = new SparkConf()
       .setAppName("Bird Classifier")
-//     .setMaster("local[*]")
+     .setMaster("local[*]")
 
     val spark = SparkSession
       .builder()
@@ -119,8 +119,11 @@ object BirdClassifier {
 
     val cv = new CrossValidator().setEstimator(pipeline).setEvaluator(cvEvaluator).setEstimatorParamMaps(paramGrid).setNumFolds(numFolds)
 
-    val rfModel = cv.fit(trainingData)
-    val rfPredictions = rfModel.transform(validationData)
+
+    //Saving the model for future accesses
+    val rfModel = cv.fit(trainingData).save("cvmodel")
+    //Loading the model from previous computation to transform data
+    val rfPredictions = CrossValidatorModel.load("cvmodel").transform(validationData)
 
     //Take the label and prediction of the test data and get the accuracy.
     val evaluator = new MulticlassClassificationEvaluator().setLabelCol("label").setPredictionCol("prediction").setMetricName("accuracy")
@@ -148,34 +151,35 @@ object BirdClassifier {
       itr.iterator
     }
 
-    // Apply the schema to the RDD
-    val TinputDF = rdd2DF(spark, filteredRDD, outheader)
-
-    //Writing the intermediate result with unnecessary columns removed
-    TinputDF.write.format("csv").option("header", "true").save(output+"/Tsamplingid")
-
-    //TODO: Look at loading it directly without writing to csv
-    //Reading the intermediate result from disk and persist
-    var TautoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/Tsamplingid").repartition(numPartitions)
-
-    val TSid = TautoDF.select("SAMPLING_EVENT_ID")
-    TautoDF = TautoDF.drop("SAMPLING_EVENT_ID")
-    TautoDF = TautoDF.drop(labelName)
-
-    //Fill null values
-    TautoDF = DFnullFix(TautoDF,labelName)
-
-    //Initializing the vector assembler to convert the cols to single feature vector
-    val Tassembler = new VectorAssembler().setInputCols(TautoDF.columns).setOutputCol("features")
-    val TfeatureDF = Tassembler.transform(TautoDF).select("features")
-
-    val TrfPredictions = rfModel.transform(TfeatureDF)
-    
-    val TzippedRDD = TrfPredictions.select("prediction").rdd.zip(TSid.rdd).map{case (Row(prediction), Row(id)) => (id.toString(),prediction.toString())}
-
-    val outDF = TzippedRDD.toDF("SAMPLING_EVENT_ID", "SAW_AGELAIUS_PHOENICEUS")
-    outDF.coalesce(1).write.format("csv").option("header", "true").save(output+"/testOut")
-
+//    // Apply the schema to the RDD
+//    val TinputDF = rdd2DF(spark, filteredRDD, outheader)
+//
+//    //Writing the intermediate result with unnecessary columns removed
+//    TinputDF.write.format("csv").option("header", "true").save(output+"/Tsamplingid")
+//
+//    //TODO: Look at loading it directly without writing to csv
+//    //Reading the intermediate result from disk and persist
+//    var TautoDF = spark.read.format("csv").option("header", "true").option("nullValue","?").option("inferSchema", "true").load(output+"/Tsamplingid").repartition(numPartitions)
+//
+//    val TSid = TautoDF.select("SAMPLING_EVENT_ID")
+//    TautoDF = TautoDF.drop("SAMPLING_EVENT_ID")
+//    TautoDF = TautoDF.drop(labelName)
+//
+//    //Fill null values
+//    TautoDF = DFnullFix(TautoDF,labelName)
+//
+//    //Initializing the vector assembler to convert the cols to single feature vector
+//    val Tassembler = new VectorAssembler().setInputCols(TautoDF.columns).setOutputCol("features")
+//    val TfeatureDF = Tassembler.transform(TautoDF).select("features")
+//
+//    //Loading the model from previous computation to transform data
+//    val TrfPredictions = CrossValidatorModel.load("cvmodel").transform(TfeatureDF)
+//
+//    val TzippedRDD = TrfPredictions.select("prediction").rdd.zip(TSid.rdd).map{case (Row(prediction), Row(id)) => (id.toString(),prediction.toString())}
+//
+//    val outDF = TzippedRDD.toDF("SAMPLING_EVENT_ID", "SAW_AGELAIUS_PHOENICEUS")
+//    outDF.coalesce(1).write.format("csv").option("header", "true").save(output+"/testOut")
+//
 
     //Stopping the spark session
     spark.stop()
